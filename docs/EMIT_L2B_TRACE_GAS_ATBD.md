@@ -37,10 +37,34 @@ Pasadena, California 91109-8099
 - V001 Plume - Initial plume identifications, based on V01 Enhancements.
 - V002 Plume - Second plume identifications, based on V02 Enhancements, including quantification for select plumes. 
 
+
+## Table of Contents
+
+- [1. Key Teammembers](#1-key-teammembers)
+- [2. Historical Context and Background on the EMIT Mission and its Instrumentation](#2-historical-context-and-background-on-the-emit-mission-and-its-instrumentation)
+- [3. Algorithm Rationale](#3-algorithm-rationale)
+- [4. Algorithm Implementation](#4-algorithm-implementation)
+  - [4.1 Input Data](#41-input-data)
+  - [4.2 Theoretical Description](#42-theoretical-description)
+    - [4.2.1 GHG Enhancements](#421-ghg-enhancements)
+    - [4.2.2 GHG Enhancement Sensitivity](#422-ghg-enhancement-sensitivity)
+    - [4.2.3 GHG Enhancement Sensitivity](#423-ghg-enhancement-sensitivity)
+    - [4.2.4 Plume Complex Identification](#424-plume-complex-identification)
+    - [4.2.5 Plume Emission Rate Estimation](#425-plume-emission-rate-estimation)
+  - [4.3 Practical Considerations](#43-practical-considerations)
+- [5. Output Data](#5-output-data)
+- [6. Calibration, uncertainty characterization and propagation, and validation](#6-calibration-uncertainty-characterization-and-propagation-and-validation)
+  - [6.1 Uncertainty quantification](#61-uncertainty-quantification)
+  - [6.2 Uncertainty in Each Pixel](#62-uncertainty-in-each-pixel)
+  - [6.3 Emission Rate Uncertainty](#63-emission-rate-uncertainty)
+  - [6.4 Validation Efforts](#64-validation-efforts)
+- [7. Constraints and Limitations](#7-constraints-and-limitations)
+- [8. Code Repository and References](#8-code-repository-and-references)
+- [9. References](#9-references)
+
 <div style="page-break-after: always;"></div>
 
-
-## **1. Key Teammembers**
+## 1. Key Teammembers
 
 Philip G. Brodrick (Jet Propulsion Laboratory) 
 Andrew K. Thorpe (Jet Propulsion Laboratory) 
@@ -63,7 +87,7 @@ iterations of the algorithms described below.
 
 <div style="page-break-after: always;"></div>
 
-## **2. Historical Context and Background on the EMIT Mission and its Instrumentation**
+## 2. Historical Context and Background on the EMIT Mission and its Instrumentation
 
 Mineral dust aerosols originate as soil particles lifted into the atmosphere by wind erosion. Mineral dust created by human activity makes a large contribution to the uncertainty of direct radiative forcing (RF) by anthropogenic aerosols (USGCRP and IPCC) and is a prominent aerosol constituent around the globe. However, we have poor understanding of its direct radiative effect, partly due to uncertainties in the dust mineral composition. Dust radiative forcing is highly dependent on its mineral-specific absorption properties. The current range of iron oxide abundance in dust source models translates into a large range of values, even changing the sign of the forcing (-0.15 to 0.21 W/m2) predicted by Earth System Models (ESMs) (Li et al., 2020). The National Aeronautics and Space Administration (NASA) selected the Earth Surface Mineral Dust Source Investigation (EMIT) to close this knowledge gap. NASA launched an instrument to the International Space Station (ISS) to directly measure and map the soil mineral composition of critical dust-forming regions worldwide.
 
@@ -79,13 +103,13 @@ Figure 1: Examples of methane (A) and carbon dioxide (B) spectral fingerprints (
 <center><img src="figs/figure_2.png" alt="observation profile"></center>
 Figure 2: Total observations and average revisit interval for nominal 1-year mission (Thorpe et al., in press).
 
-## **3. Algorithm Rationale**
+## 3. Algorithm Rationale
 
 The EMIT GHG Point Source Detection approach builds on a substantial history of remote greenhouse gas detections from airborne imaging spectrometers (Thorpe et al., 2013, 2014, 2017; Thompson et al., 2015; Frankenberg et al., 2016; Duren et al., 2019; Cusworth et al., 2022). We leverage a per-column adaptive matched filter for the primary detection, due to the speed and efficacy of identifying subtle signatures.  We customize the deployment in order to minimize false positives, after which a series of scientists manually review individual plumes in order to provide only instances with maximum confidence.
 
-## **4. Algorithm Implementation**
+## 4. Algorithm Implementation
 
-### **4.1 Input Data**
+### 4.1 Input Data
 
 Input and output products for the EMIT CH4 and CO2 products are held as a combination of binary data cubes with detached human-readable ASCII header files, and cloud optimized GeoTIFFs (COGs; which ultimately constitute the delivery to the LP DAAC).  The former adhere to the ENVI standard (accessible Aug 2023 at https://www.nv5geospatialsoftware.com/docs/ENVIHeaderFiles.html), and the latter adhere to the COG specification (https://github.com/cogeotiff/cog-spec/blob/master/spec.md, accessible Aug 2023).  The header files all consist of data fields in equals-sign-separated pairs and describe the layout of the file.  In the file descriptions below, n denotes the number of lines particular to the given scene, which can vary – it is normally 1280, but for some scenes at the trailing end of an orbit segment, may reach as high as 2559.
 
@@ -99,10 +123,9 @@ The specific input files needed for the primary GHG detection are:
 5.	**Bandmask file**, provided as an n x 1242 x 36 BIL interleave data cube (rows, columns, bands) – this is an output product of L2A with the shortname EMIT_L2A_MASK on delivery.
 
 
-### **4.2 Theoretical Description**
+### 4.2 Theoretical Description
 
 The procedures that follow outline a procedure for identifying methane enhancements that are clearly separable from any background noise, and which can be identified as point source emissions.  As with all measurements, instrument noise and algorithmic error present some amount of false positives, which we mitigate through manual review of identified plume complexes. We describe the algorithms used here but encourage interested parties to examine the publicly available code for all details, as the precise implementation of the procedure is ultimately quite important.  All algorithms used here are based heavily on existing literature (Thompson et al., 2015).
-
 
 #### 4.2.1 GHG Enhancements
 
@@ -224,7 +247,6 @@ This raises the question of how to estimate $C$.  We have direct knowledge of $C
 
 In the ideal scenario, these values would be uniformly zero – in practice they tend to fall below 500 ppm m, though vary scene by scene.  It is possible that unidentified plume complexes – true positives within a scene that are not ranked high enough in confidence to be determined as a plume complex – inflate this uncertainty estimate in some cases.
 
-
 ### 6.2 Uncertainty in Each Pixel
 
 In addition to the scene-wide uncertainty described above, an uncertainty due to sensor noise for each spatial pixel is provided following Fahlen et al., 2024. The per-pixel uncertainty is given 
@@ -235,8 +257,7 @@ $$
 
 where $\frac{xs}{\mu}$ is interpreted as element-by-element products. The EMIT noise model is used to produce the diagonal matrix $\Sigma(x)$, the specifics of which can be found in the GitHub repository for the source code at instrument_noise_parameters/emit_noise.txt. The uncertainty is in the same units as the GHG enhancement product: [ppm m].
 
-
-### 6.3 Emission Rate Uncertainty 
+### 6.3 Emission Rate Uncertainty
 
 Uncertainty in the plume emission rate comes from many sources, including:
 - wind speed
@@ -259,14 +280,14 @@ where $\sigma_{li}$ is the concentration length uncertainty described above and 
 EMIT validation activities are integral to continued demonstration of its greenhouse mapping capability. Future plans include utilizing the AVIRIS-3 instrument (Coleman, 2025), an airborne equivalent of EMIT, to permit comparison of results obtained from space with EMIT. Comparison of EMIT greenhouse gas results with other satellite instruments (i.e., GHGSat, OCO-3) are also planned in addition to controlled release experiments.
 
 ## 7. Constraints and Limitations
+
 No constraints or limitations are imposed on the EMIT methane or carbon dioxide products.  All delivered data will have undergone quality control and should be considered valid, calibrated data up to the reported uncertainties in input parameters.  Unanticipated data corruption due to factors outside the modeling, if discovered, will be reported in peer reviewed literature and/or addenda to this ATBD.
 
 ## 8. Code Repository and References
+
 All code used for the matched filter enhancement is available at the EMIT GHG repository https://github.com/emit-sds/emit-ghg.  The scientist review portal is based on code available at https://github.com/NASA-AMMOS/MMGIS/tree/development, and interfaces with code in the EMIT GHG repository.
 
-
-
-## **References**
+## 9. References
 
 L. Li, N.M. Mahowald, R.L. Miller, C. Pérez García-Pando, M. Klose, D.S. Hamilton, M. Gonçalves Ageitos, P. Ginoux, Y. Balkanski, R.O. Green, O. Kalashnikova, J.F. Kok, V. Obiso, D. Paynter, and D.R. Thompson: Quantifying the range of the dust direct radiative effect due to source mineralogy uncertainty, Atmos. Chem. Phys., 21, 3973–4005, https://doi.org/10.5194/acp-21-3973-2021 (2021).
 
