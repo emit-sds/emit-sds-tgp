@@ -21,12 +21,28 @@ Pasadena, California 91109-8099  </br>
 
 <div style="page-break-after: always;"></div>
 
-## 1	Introduction
+## Table of Contents
 
-### 1.1	Identification
+- [1 Introduction](#1-introduction)
+  - [1.1 Identification](#11-identification)
+  - [1.2 Overview](#12-overview)
+  - [1.3 Product Overview](#13-product-overview)
+  - [1.4 File Formats](#14-file-formats)
+    - [1.4.1 Metadata Structure](#141-metadata-structure)
+    - [1.4.2 L2B GHG Data Products](#142-l2b-ghg-data-products)
+  - [1.5 Product Availability](#15-product-availability)
+- [2 Greenhouse Gas Products](#2-greenhouse-gas-products)
+  - [2.1 Delivery Frequency](#21-delivery-frequency)
+  - [2.2 File Structure](#22-file-structure)
+- [3 References](#3-references)
+- [4 Acronyms](#4acronyms)
+
+## 1 Introduction
+
+### 1.1 Identification
 This document describes information about the file structure and datasets provided in the EMIT Level 2B Greenhouse Gas data products. The algorithms and data content of the Level 2B CH4ENH, CH4PLM. CO2ENH, CO2PLMdata products are described briefly in this guide, with the purpose of providing the user with sufficient information about the content and structure of the data files to enable the user to access and use the data, in addition to understanding the uncertainties involved in the products.  More detail on the detection methods used are available in the [L2B GHG ATBD](EMIT_L2B_TRACE_GAS_ATBD.md).
 
-### 1.2	Overview
+### 1.2 Overview
 Mineral dust aerosols originate as soil particles lifted into the atmosphere by wind erosion.  Mineral dust created by human activity makes a large contribution to the uncertainty of direct radiative forcing (RF) by anthropogenic aerosols (USGCRP and IPCC). Mineral dust is a prominent aerosol constituent around the globe. However, we have poor understanding of its direct radiative effect, partly due to uncertainties in the dust mineral composition. Dust radiative forcing is highly dependent on its mineral-specific absorption properties. The current range of iron oxide abundance in dust source models translates into a large range of values, even changing the sign of the forcing (-0.15 to 0.21 W/m2) predicted by Earth System Models (ESMs) (Li et al., 2020). The National Aeronautics and Space Administration (NASA) recently selected the Earth Mineral Dust Source Investigation (EMIT) to close this knowledge gap. EMIT was launched on July 14, 2022 to the International Space Station (ISS) to directly measure and map the soil mineral composition of critical dust-forming regions worldwide.
 
 In addition to its primary objective described above, EMIT has demonstrated the capacity to characterize methane (CH4) and carbon dioxide (CO2) point source emissions by measuring gas absorption features in the shortwave infrared.  This document breaks from the other mission Algorithm Theoretical Basis Documents (ATBDs), as the CH4 and CO2 products are not part of the standard series of interconnected science products.  Readers should consult the L1B ATBD for the precursor products to what are used here.
