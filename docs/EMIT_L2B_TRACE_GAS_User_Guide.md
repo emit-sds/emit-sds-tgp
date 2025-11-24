@@ -40,8 +40,6 @@ Shortly after completing initial data validation, it became evident that EMIT wa
 
 There are currently four greenhouse gas data products being produced by EMIT, two for methane and two for carbon dioxide.  The methane products are the EMIT L2B Methane Enhancement Data product (EMIT L2B CH4 ENH) and the EMIT L2B Estimated Methane Plume Complexes (EMIT L2B CH4 PLM). The carbon dioxide products are the EMIT L2B Carbon Dioxide Enhancement Data product (EMIT L2B CO2 ENH) and the EMIT L2B Estimated Carbon Dioxide Plume Complexes (EMIT L2B CO2 PLM).  All of these products are provided as Cloud Optimized GeoTIFFs (COGs), with accompanying GeoJSON metadata.
 
-More products, include per-pixel uncertainties and emission rate estimates are planned for the near future.
-
 
 ### 1.4 File Formats
 #### 1.4.1 Metadata Structure
@@ -132,8 +130,6 @@ Table 1-2: EMIT L2B Data Products Summary
 
 <tr><td colspan="6"><b>>Collection: EMIT L2B Methane Plume Complexes – EMITL2BCH4PLM</b></td></tr>
 <tr><td>Methane Plume Complexes</td><td>L2B</td><td>x, y, 1</td><td>60 m*</td><td>72 km*</td><td>WGS-84, EPSG:4326</td></tr>
-
-<tr><td>Earth Science Data Type</td><td>Product Level</td><td>Data Dimension</td><td>Spatial Resolution</td><td>Swath Width</td><td>Map Projection</td></tr>
 
 <tr><td colspan="6"><b>Collection: EMIT L2B Carbon Dioxide Enhancement Data – EMITL2BCO2ENH</b></td></tr>
 <tr><td>Carbon Dioxide Enhancement Data</td><td>L2B</td><td>x, y, 1</td><td>60 m*</td><td>72 km*</td><td>WGS-84, EPSG:4326</td></tr>
