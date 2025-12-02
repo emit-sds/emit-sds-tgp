@@ -1,6 +1,6 @@
 ## **Earth Surface Mineral dust source InvesTigation (EMIT)** 
 
-# **EMIT L2B Algorithm: Masks** 
+# EMIT Greenhouse Gas Algorithms: Greenhouse Gas Point Source Mapping and Related Products
 
 *Philip G. Brodrick*<sup>1</sup>
 *Andrew K. Thorpe*<sup>1</sup>
