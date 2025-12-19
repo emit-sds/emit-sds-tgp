@@ -25,6 +25,14 @@ from scipy.ndimage import gaussian_filter
 from copy import deepcopy
 import datetime
 
+def get_daac_link(feature, product_version):
+    prod_v = product_version.split('V')[-1]
+    fid=feature['Scene FIDs'][0]
+    cid= feature['Plume ID'].split('-')[-1].zfill(6)
+    link = f'https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2BCH4PLM.{prod_v}/EMIT_L2B_CH4PLM_{prod_v}_{fid[4:12]}T{fid[13:19]}_{cid}/EMIT_L2B_CH4PLM_{prod_v}_{fid[4:12]}T{fid[13:19]}_{cid}.tif'
+    return link
+
+
 def gauss_blur(img, sigma, preserve_nans=False):
     
     V=img.copy()

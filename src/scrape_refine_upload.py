@@ -27,20 +27,17 @@ from rasterio.features import rasterize
 import logging
 from emit_main.workflow.workflow_manager import WorkflowManager
 import pandas as pd
+from typing import List
 
 from annotate import plume_io, filter, utils
+from quantification import simple_ime, compute_flux
+
+gdal.osr.UseExceptions()
 
 
-def get_daac_link(feature, product_version):
-    prod_v = product_version.split('V')[-1]
-    fid=feature['Scene FIDs'][0]
-    cid= feature['Plume ID'].split('-')[-1].zfill(6)
-    link = f'https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2BCH4PLM.{prod_v}/EMIT_L2B_CH4PLM_{prod_v}_{fid[4:12]}T{fid[13:19]}_{cid}/EMIT_L2B_CH4PLM_{prod_v}_{fid[4:12]}T{fid[13:19]}_{cid}.tif'
-    return link
-
-def get_sds_cog(fid, enh_version, dtype='ch4'):
+def get_sds_cog(fid, enh_version, dtype='ch4', data_value=''):
     date = fid[4:12]
-    path=f'/store/emit/ops/data/acquisitions/{date}/{fid.split("_")[0]}/ghg/{dtype}/{fid.split("_")[0]}*_ghg_ort{dtype}_b0106_{enh_version}.tif'
+    path=f'/store/emit/ops/data/acquisitions/{date}/{fid.split("_")[0]}/ghg/{dtype}/{fid.split("_")[0]}*_ghg_ort{data_value}{dtype}_b0106_{enh_version}.tif'
     return path
 
 def plume_delivery_basename(outdir, feat):
@@ -98,8 +95,10 @@ def main(input_args=None):
     previous_annotation_file = os.path.join(args.out_dir, "previous_manual_annotation.json") # Last editted version of annotation file
     output_json = os.path.join(args.out_dir, 'combined_plume_metadata.json') # Output (public facing) metadata file
     delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
+    quant_dir = os.path.join(args.out_dir, 'quantification') # Quantification working directory
+    working_flux_csv = os.path.join(args.out_dir, 'working_flux_estimates.csv') # Quantification working file
     os.makedirs(delivery_dir, exist_ok=True)
-
+    os.makedirs(quant_dir, exist_ok=True)
 
     for run in range(max_runs):
         logging.debug('Loading Data')
@@ -185,14 +184,32 @@ def main(input_args=None):
             logging.info(f'...found {len(plumes_idx_in_dcid)} plumes to update and {len(fids_in_dcid)} FIDs')
 
             ort_dat_files = [get_sds_cog(fid, args.enh_data_version, dtype=args.type) for fid in fids_in_dcid]
+            ort_sens_files = [get_sds_cog(fid, args.enh_data_version, dtype=args.type, data_value='sens') for fid in fids_in_dcid]
+            unc_dat_files = [get_sds_cog(fid, args.enh_data_version, dtype=args.type, data_value='uncert') for fid in fids_in_dcid]
+
             dcid_ort_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.vrt')
+            dcid_ort_unc_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_unc_ort.vrt')
+            dcid_ort_sns_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_sns_ort.vrt')
             dcid_ort_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.tif')
             utils.print_and_call(f'gdalbuildvrt {dcid_ort_vrt_file} {" ".join(ort_dat_files)} --quiet')
             utils.print_and_call(f'gdal_translate {dcid_ort_vrt_file} {dcid_ort_tif_file} -co COMPRESS=LZW --quiet')
 
+
             ort_ds = gdal.Open(dcid_ort_tif_file)
             ortdat = ort_ds.ReadAsArray().squeeze()
             trans = ort_ds.GetGeoTransform()
+
+            # Only create sns and unc if needed
+            estimate_simple_ime = np.sum([manual_annotations['features'][x]['properties']['Simple IME Valid'] != 'NA' for x in plumes_idx_in_dcid]) > 0
+            snsdat, uncdat = None, None
+            if estimate_simple_ime:
+                utils.print_and_call(f'gdalbuildvrt {dcid_ort_sns_vrt_file} {" ".join(ort_sens_files)} --quiet')
+                utils.print_and_call(f'gdalbuildvrt {dcid_ort_unc_vrt_file} {" ".join(unc_dat_files)} --quiet')
+                #utils.print_and_call(f'gdaltranslate {dcid_ort_sns_vrt_file} {dcid_ort_sns_vrt_file.replace(".vrt",".tif")} -co COMPRESS=LZW --quiet')
+                #utils.print_and_call(f'gdaltranslate {dcid_ort_unc_vrt_file} {dcid_ort_unc_vrt_file.replace(".vrt",".tif")} -co COMPRESS=LZW --quiet')
+                snsdat = gdal.Open(dcid_ort_sns_vrt_file).ReadAsArray().squeeze()
+                uncdat = gdal.Open(dcid_ort_unc_vrt_file).ReadAsArray().squeeze()
+
 
             # Calculate pixel size for DCID
             proj_ds = gdal.Warp('', dcid_ort_tif_file, dstSRS='EPSG:3857', format='VRT')
@@ -200,6 +217,12 @@ def main(input_args=None):
             xsize_m = transform_3857[1]
             ysize_m = transform_3857[5]
             del proj_ds
+
+
+
+
+
+
 
             ######## Step 3 ##############
             # Use the manual plumes to come up with a new set of plume masks and labels
@@ -232,6 +255,13 @@ def main(input_args=None):
                 tocut[loc_fid_mask == 0] = -9999
                 cut_plume_data, _ = plume_io.trim_plume(tocut, trans, nodata_value=-9999)
 
+                if estimate_simple_ime:
+                    uncdat[loc_fid_mask == 0] = -9999
+                    snsdat[loc_fid_mask == 0] = -9999
+                    cut_uncdat, _ = plume_io.trim_plume(uncdat, trans, nodata_value=-9999)
+                    cut_snsdat, _ = plume_io.trim_plume(snsdat, trans, nodata_value=-9999)
+
+
 
 
                 ############  Step 4 ###########
@@ -253,10 +283,6 @@ def main(input_args=None):
                 utils.print_and_call(f'gdal_polygonize {outmask_ort_file} {outmask_finepoly_file} -f GeoJSON -mask {outmask_ort_file} -8 -quiet')
                 utils.print_and_call(f'ogr2ogr {outmask_poly_file} {outmask_finepoly_file} -f GeoJSON -lco RFC7946=YES -simplify {trans[1]} --quiet')
 
-                ## Save a running tile of the ort files and polygon files for this DCID, only for mosaicing
-                #dcid_mask_tif_files.append(outmask_ort_file)
-                #dcid_mask_poly_files.append(outmask_poly_file)
-
                 # Read back in the polygon we just wrote
                 plume_to_add = json.load(open(outmask_poly_file))['features']
                 if len(plume_to_add) > 1:
@@ -269,6 +295,7 @@ def main(input_args=None):
                 updated_plumes_poly.append(poly_plume)
 
 
+
                 # These are the real delivery files
                 delivery_base = plume_delivery_basename(delivery_dir, poly_plume)
                 os.makedirs(os.path.dirname(delivery_base), exist_ok=True)
@@ -276,11 +303,73 @@ def main(input_args=None):
                 delivery_raster_file = os.path.join(delivery_base + '.tif')
                 delivery_ql_file = os.path.join(delivery_base + '.png')
                 delivery_json_file = os.path.join(delivery_base + '.json')
+                delivery_uncert_file = delivery_raster_file.replace(args.type.upper(), args.type.upper() + '_UNC_')
+                delivery_sens_file = delivery_raster_file.replace(args.type.upper(), args.type.upper() + '_SNS_')
 
                 meta = plume_io.get_metadata(poly_plume, plume_io.global_metadata(data_version=args.data_version))
                 plume_io.write_cog(delivery_raster_file, cut_plume_data.reshape((cut_plume_data.shape[0], cut_plume_data.shape[1],1)).astype(np.uint8), 
                           newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
                 plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file)
+
+                if estimate_simple_ime:
+                    plume_io.write_cog(delivery_uncert_file, cut_uncdat.reshape((cut_uncdat.shape[0], cut_uncdat.shape[1],1)).astype(np.uint8), 
+                              newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
+                    plume_io.write_cog(delivery_sens_file, cut_snsdat.reshape((cut_snsdat.shape[0], cut_snsdat.shape[1],1)).astype(np.uint8), 
+                              newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
+
+
+                    class flux_args:
+                        def __init__(self):
+                            self.minppmm = 500
+                            self.mergedistm = 200
+                            self.maxppmm = 3000
+                            self.maxfetchm = 1000
+                            self.minaream2 = 0
+
+                            self.plot_diag = True
+                            self.verbose = False
+                            self.fid = poly_plume['properties']['Plume ID']
+
+                            self.name_suffix = ''
+                            self.plot_path = quant_dir
+
+                            pso = json.loads(feat['properties']['Psuedo-Origin'])
+                            self.lat = pso['coordinates'][1]
+                            self.lng = pso['coordinates'][0]
+
+                            self.cmfimgf = delivery_raster_file
+                            self.sns_file = delivery_sens_file
+                            self.unc_file = delivery_uncert_file
+ 
+                            mb_coords = poly_plume['geometry']['coordinates']
+                            if isinstance(mb_coords[0][0], List):
+                                mb_coords = mb_coords[0] 
+                            self.manual_boundary_coordinates_lon_lat = [item for sublist in mb_coords for item in sublist]
+
+                            self.mask_mode = 'infer'
+                            self.q_method = 'mask'
+
+                            self.rgbimgf = None
+                            self.labimgf = None
+
+                            self.log_level = args.loglevel
+
+                        unc_file = None
+
+                    lfa = flux_args()
+                    quant_status, quant_res = compute_flux.compute_flux(lfa)
+                    logging.info(f'Quantification status: {quant_status}')
+                    logging.info(f'Quantification results: {quant_res}')
+
+
+                ## Quantify Emissions
+                #cmd = f'python3 compute_flux.py --minppmm 500 --mergedistm 200 --maxppmm 3000 --maxfetchm 1000 --minaream2 0 --cmfimgf {full_path} ' + \
+                #f'--lng {plume_lon} --lat {plume_lat} --plot_diag --verbose --csv_file {csv_file} --fid {plume_complex_id} ' + \
+                #f'--csv_path {csv_path} --plot_path {plot_path} --name_suffix "{name_suffix}" --sns_file "{sns_arg}" --unc_file "{unc_arg}" ' + \
+                #f'--manual_boundary_coordinates_lon_lat {bound_str} --mask_mode infer --q_method mask' 
+
+
+
                 plume_io.write_json(delivery_json_file, poly_plume, meta['Source_Scenes'])
 
         ########## Step 5 ##########
