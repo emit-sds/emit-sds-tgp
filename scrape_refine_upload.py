@@ -29,21 +29,53 @@ from shapely.geometry import Polygon
 import shapely
 from copy import deepcopy
 from osgeo import gdal
-from masked_plume_delineator import write_output_file
 from rasterio.features import rasterize
 import logging
 import matplotlib.pyplot as plt
-from masked_plume_delineator import gauss_blur
 from emit_main.workflow.workflow_manager import WorkflowManager
 import pandas as pd
 import geopandas as gpd
+from scipy.ndimage import gaussian_filter
 
 
-def print_and_call(cmd_str, loglevel=logging.DEBUG):
-    logging.log(loglevel, f'Calling: {cmd_str}')
+
+def gauss_blur(img, sigma, preserve_nans=False):
+    
+    V=img.copy()
+    V[np.isnan(img)]=0
+    VV=gaussian_filter(V,sigma=sigma)
+
+    W=0*img.copy()+1
+    W[np.isnan(img)]=0
+    WW=gaussian_filter(W,sigma=sigma)
+
+    img_smooth=VV/WW
+    if preserve_nans:
+        img_smooth[np.isnan(img)] = np.nan
+    
+    return img_smooth
+
+def print_and_call(cmd_str):
+    logging.debug(f'Calling: {cmd_str}')
     subprocess.call(cmd_str, shell=True)
 
-def write_cog(output_file, data, inds, nodata_value=-9999):
+#def write_output_file(source_trans, source_proj, output_img, output_file):
+#    driver = gdal.GetDriverByName('GTiff')
+#    driver.Register()
+#    if len(output_img.shape) == 2:
+#        outDataset = driver.Create(output_file,output_img.shape[1],output_img.shape[0],1,gdal.GDT_Byte,options = ['COMPRESS=LZW'])
+#        outDataset.GetRasterBand(1).WriteArray(output_img)
+#    else:
+#        outDataset = driver.Create(output_file,output_img.shape[1],output_img.shape[0],3,gdal.GDT_Byte,options = ['COMPRESS=LZW'])
+#        for n in range(1,4):
+#            outDataset.GetRasterBand(n).WriteArray(output_img[...,n-1])
+#            outDataset.GetRasterBand(n).SetNoDataValue(0)
+#
+#    outDataset.SetProjection(source_proj)
+#    outDataset.SetGeoTransform(source_trans)
+#    del outDataset
+
+def write_cog(output_file, data, source_trans, source_proj, metadata=None, nodata_value=-9999):
     """
     Writes a Cloud Optimized GeoTIFF (COG) file.
 
@@ -51,8 +83,8 @@ def write_cog(output_file, data, inds, nodata_value=-9999):
         output_file (str): Path to the output COG file.
         data (numpy.ndarray): The spectral data to be written, with shape (rows, cols, bands).
         inds: (gdal dataset) GDAL dataset with metadata.
+        metadata (dict, optional): Metadata to be added to the output file. Defaults to None.
         nodata_value (, optional): The nodata value to use. Defaults to -9999.
-        gdal_dtype (int, optional): The GDAL data type to use. Defaults to 6 (Float32).
     """
     driver = gdal.GetDriverByName('MEM')
 
@@ -68,8 +100,13 @@ def write_cog(output_file, data, inds, nodata_value=-9999):
     }
 
     ds = driver.Create('', od.shape[1], od.shape[0], od.shape[2], numpy_to_gdal[od.dtype])
-    ds.SetGeoTransform(inds.GetGeoTransform())
-    ds.SetProjection(inds.GetProjection())
+    ds.SetGeoTransform(source_trans)
+    ds.SetProjection(source_proj)
+    if metadata:
+        md = ds.GetMetadata()
+        md.update(metadata)
+        ds.SetMetadata(md)  
+
     for i in range(od.shape[2]):
         ds.GetRasterBand(i+1).WriteArray(od[:, :, i])
         ds.GetRasterBand(i+1).SetNoDataValue(nodata_value)
@@ -175,14 +212,9 @@ def add_fids(manual_annotations, coverage, manual_annotations_previous):
             rev_match = True
             for rl in ['R1 - Reviewed','R2 - Reviewed','R1 - VISIONS','R2 - VISIONS', 
                        'Psuedo-Origin', 'Sector', 'Sector Confidence', 'Time Range End', 'Time Range Start']:
-                if rl in feat['properties'] and rl not in manual_annotations_previous['features'][prev_idx]['properties']:
-                    rev_match = False
-                elif rl not in feat['properties'] and rl in manual_annotations_previous['features'][prev_idx]['properties']:
-                    rev_match = False
-                elif rl in feat['properties'] and rl in manual_annotations_previous['features'][prev_idx]['properties']:
-                    rev_match = False
-                #if feat['properties'][rl] != manual_annotations_previous['features'][prev_idx]['properties'][rl]:
-                #    rev_match = False
+                if rl in feat['properties'] and rl in manual_annotations_previous['features'][prev_idx]['properties']:
+                    if feat['properties'][rl] != manual_annotations_previous['features'][prev_idx]['properties'][rl]:
+                        rev_match = False
 
             if new_geom == prev_geom and rev_match:
                 manual_annotations_fid['features'][_feat] = manual_annotations_previous['features'][prev_idx]
@@ -201,14 +233,15 @@ def add_fids(manual_annotations, coverage, manual_annotations_previous):
             manual_annotations_fid['features'][_feat]['properties']['fids'] = fids
             updated_plumes.append(_feat)
 
-    logging.warning('Bad metadata for the following plumes:')
-    for td in np.array(todel)[::-1]:
-        msg = f'{manual_annotations_fid["features"][td]["properties"]["Plume ID"]}'
-        logging.warning(msg)
-    for td in np.array(todel)[::-1]:
-        msg = f'Deleting entry due to bad metadata - check input {manual_annotations_fid["features"][td]["properties"]}'
-        logging.warning(msg)
-        manual_annotations_fid['features'].pop(td)
+    if len(todel) > 0:
+        logging.warning('Bad metadata for the following plumes:')
+        for td in np.array(todel)[::-1]:
+            msg = f'{manual_annotations_fid["features"][td]["properties"]["Plume ID"]}'
+            logging.warning(msg)
+        for td in np.array(todel)[::-1]:
+            msg = f'Deleting entry due to bad metadata - check input {manual_annotations_fid["features"][td]["properties"]}'
+            logging.warning(msg)
+            manual_annotations_fid['features'].pop(td)
 
     updated_plumes = np.array([x for x in updated_plumes if x not in todel]) # shouldn't be necessary anymore, deosn't hurt
     for td in np.array(todel)[::-1]:
@@ -234,7 +267,6 @@ def add_orbits(annotations, indices_to_update, database):
 
         if len(db_ret) == 0 or None in scene_numbers:
             logging.info(f'No FIDs or DAAC Scenes at {annotations["features"][ind]["properties"]["Plume ID"]}...skipping')
-            #import ipdb; ipdb.set_trace()
             annotations['features'][ind]['properties']['orbit'] = []
             ind_to_pop.append(ind)
             update_ind_to_pop.append(_ind)
@@ -291,8 +323,43 @@ def write_color_plume(rawdat, plumes_mask, glt_ds, outname: str, style = 'ch4'):
     colorized = (colorized * 255).astype(np.uint8)
     colorized[plumes_mask,:] = np.maximum(1, colorized[plumes_mask,:])
 
-    #write_output_file(glt_ds, colorized, outname)
     write_cog(outname, colorized, glt_ds, nodata_value=0)
+
+
+def write_color_quicklook(indat, output_file):
+    dat = indat.copy()
+    mask = dat != -9999
+    dat[dat < 0] = 0
+    dat = dat /1500.
+    output = np.zeros((indat.shape[0],indat.shape[1],3),dtype=np.uint8)
+    output[mask,:] = np.round(plt.cm.plasma(dat[mask])[...,:3] * 255).astype(np.uint8)
+    output[mask,:] = np.maximum(1, output[mask])
+
+
+    memdriver = gdal.GetDriverByName('MEM')
+    memdriver.Register()
+    outDataset = memdriver.Create('',dat.shape[1],dat.shape[0],3,gdal.GDT_Byte)
+    for n in range(1,4):
+        outDataset.GetRasterBand(n).WriteArray(output[...,n-1])
+        outDataset.GetRasterBand(n).SetNoDataValue(0)
+
+    driver = gdal.GetDriverByName('PNG')
+    driver.Register()
+    dst_ds = driver.CreateCopy(output_file, outDataset, strict=0)
+    del dst_ds, outDataset
+ 
+
+def write_json(output_file, plume_dict, scene_names):
+    outdict = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84" }, "type": "name"},"features":[],"name":"methane_metadata","type":"FeatureCollection" }
+    outdict['features'].append(deepcopy(plume_dict))
+
+    outdict['features'][0]['properties']['DAAC Scene Names'] = scene_names
+    del outdict['features'][0]['properties']['style']
+    del outdict['features'][0]['properties']['Data Download']
+
+    with open(output_file, 'w') as fout:
+        fout.write(json.dumps(outdict, cls=SerialEncoder)) 
+
 
 
 def prep_predictor_image(predictor, data, ptype):
@@ -344,20 +411,235 @@ def sam_segmentation(predictor, rawspace_coords, manual_mask, n_input_points=20)
 
     return masks[0,...]
 
-def trim_plume(plume_mask, trans):
-    y_locs = np.where(np.sum(plume_mask > 0, axis=1))[0]
-    x_locs = np.where(np.sum(plume_mask > 0, axis=0))[0]
+def trim_plume(plume_mask, trans, nodata_value=0):
+    y_locs = np.where(np.sum(plume_mask != nodata_value, axis=1))[0]
+    x_locs = np.where(np.sum(plume_mask != nodata_value, axis=0))[0]
 
-    trimmed_mask = plume_mask[y_locs[0]:y_locs[-1]+1, x_locs[0]:x_l
+    if len(y_locs) == 0 or len(x_locs) == 0:
+        raise ValueError('No valid plume pixels found in mask to trim')
 
-def get_daac_link(plume_id):
-    # Get Radiance link
-    return 'Coming soon'
+    trimmed_mask = plume_mask[y_locs[0]:y_locs[-1]+1, x_locs[0]:x_locs[-1]+1].copy()
+    outtrans = list(deepcopy(trans))
+    outtrans[0] += x_locs[0] * trans[1]
+    outtrans[3] += y_locs[0] * trans[5]
+    return trimmed_mask, outtrans
+
+def build_plume_properties(plume_input_properties, plume_geometry, plume_data, trans, data_version, xsize_m, ysize_m, nodata_value=-9999):
+
+    loc_pp = deepcopy(plume_input_properties)
+    loc_pp['geometry'] = plume_geometry
+
+    props = {}
+    props['Plume ID'] = loc_pp['Plume ID']
+    props['Scene FIDs'] = loc_pp['fids']
+    props['Orbit'] = loc_pp['orbit']
+    props['DCID'] = loc_pp['dcid']
+    props['DAAC Scene Numbers'] = loc_pp['daac_scenes']
+    props["Data Download"] = get_daac_link(props, data_version)
+
+
+    inplume_dat = plume_data[plume_data != nodata_value]
+
+    start_datetime = datetime.datetime.strptime(loc_pp['fids'][0][4:], "%Y%m%dt%H%M%S")
+    end_datetime = start_datetime + datetime.timedelta(seconds=1)
+
+    start_datetime = start_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_datetime = end_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+   
+    
+    maxval = np.nanmax(inplume_dat)
+    if len(inplume_dat) < 5 or maxval < 200 or np.isnan(maxval):
+        logging.warning(f'Plume {loc_pp["Plume ID"]} has insufficient data...skipping')
+        return None
+
+    rawloc = np.where(plume_data == maxval)
+    maxval = np.round(maxval)
+
+    #sum and convert to kg.  conversion:
+    # ppm m / 1e6 ppm * x_pixel_size(m)*y_pixel_size(m) 1e3 L / m^3 * 1 mole / 22.4 L * 0.01604 kg / mole
+    ime_scaler = (1.0/1e6)* ((np.abs(xsize_m*ysize_m))/1.0) * (1000.0/1.0) * (1.0/22.4)*(0.01604/1.0)
+
+    ime = np.nansum(inplume_dat) * ime_scaler
+    ime_p = np.nansum(inplume_dat[inplume_dat > 0]) * ime_scaler
+
+    ime = np.round(ime,2)
+    #ime_uncert = np.round(len(inplume_dat) * background * ime_scaler,2)
+
+    max_loc_y = trans[3] + trans[5]*(rawloc[0][0]+0.5)
+    max_loc_x = trans[0] + trans[1]*(rawloc[1][0]+0.5)
+
+    props["UTC Time Observed"] = start_datetime
+    props["map_endtime"] = end_datetime
+    props["Max Plume Concentration (ppm m)"] = maxval
+    #props["Concentration Uncertainty (ppm m)"] = background
+    #props["Integrated Methane Enhancement (kg CH4)"] = ime
+    #props["Integrated Methane Enhancement - Positive (kg CH4)"] = ime_p
+    #props["Integrated Methane Enhancement Uncertainty (kg CH4)"] = ime_uncert
+    props["Latitude of max concentration"] = np.round(max_loc_y, 5)
+    props["Longitude of max concentration"] = np.round(max_loc_x, 5)
+    
+
+    # For R1 Review
+    if not loc_pp['R1 - Reviewed']:
+        props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "red", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+    
+    # For R2 Review
+    if loc_pp['R1 - Reviewed'] and loc_pp['R1 - VISIONS'] and not loc_pp['R2 - Reviewed']:
+        props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "green", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+
+    # Accept
+    if loc_pp['R1 - Reviewed'] and loc_pp['R1 - VISIONS'] and loc_pp['R2 - Reviewed'] and loc_pp['R2 - VISIONS']:
+        props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "white", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+    
+    # Reject
+    if (loc_pp['R1 - Reviewed'] and not loc_pp['R1 - VISIONS']) or (loc_pp['R2 - Reviewed'] and not loc_pp['R2 - VISIONS']):
+        props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "yellow", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+
+    poly_res = {"geometry": loc_pp['geometry'],
+               "type": "Feature",
+               "properties": props}
+
+    props['style']['radius'] = 10
+    point_res = {"geometry": {"coordinates": [max_loc_x, max_loc_y, 0.0], "type": "Point"},
+               "properties": props,
+               "type": "Feature"}
+    
+    return poly_res, point_res
+
+    # First add in polygon
+    existing_match_index = [_x for _x, x in enumerate(outdict['features']) if props['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] != 'Point']
+    if len(existing_match_index) > 2:
+        logging.warning("HELP! Too many matching indices")
+    if len(existing_match_index) > 0:
+        outdict['features'][existing_match_index[0]] = loc_res
+    else:
+        outdict['features'].append(loc_res)
+    
+    # Now add in point
+    existing_match_index = [_x for _x, x in enumerate(outdict['features']) if props['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] == 'Point']
+    if len(existing_match_index) > 2:
+        logging.warning("HELP! Too many matching indices")
+    if len(existing_match_index) > 0:
+        outdict['features'][existing_match_index[0]] = point_res
+    else:
+        outdict['features'].append(point_res)
+
+    return outdict
+
+
+def get_daac_link(feature, product_version):
+    prod_v = product_version.split('V')[-1]
+    fid=feature['Scene FIDs'][0]
+    cid= feature['Plume ID'].split('-')[-1].zfill(6)
+    link = f'https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/EMITL2BCH4PLM.{prod_v}/EMIT_L2B_CH4PLM_{prod_v}_{fid[4:12]}T{fid[13:19]}_{cid}/EMIT_L2B_CH4PLM_{prod_v}_{fid[4:12]}T{fid[13:19]}_{cid}.tif'
+
+    return link
+    if len(glob.glob(os.path.join(outbasedir, fid[4:12], 'l2bch4plm', f'EMIT_L2B_CH4PLM_{prod_v}_{fid[4:12]}T{fid[13:19]}_{cid}*.json'))) > 0:
+        return link
+    else:
+        return 'Coming soon'
+
 
 def get_sds_cog(fid, dtype='ch4', version='02'):
     date = fid[4:12]
     path=f'/store/emit/ops/data/acquisitions/{date}/{fid.split("_")[0]}/ghg/{dtype}/{fid.split("_")[0]}*_ghg_ortch4_b0106_v02.tif'
     return path
+
+def write_geojson_linebyline(output_file, outdict):
+    with open (output_file, 'w') as f:
+        # Write opening brace
+        f.write('{\n')
+        
+        # Write all properties except 'features' with 4-space indent
+        properties = {k: v for k, v in outdict.items() if k != 'features'}
+        for i, (key, value) in enumerate(properties.items()):
+            value_str = json.dumps(value, indent=4, cls=SerialEncoder)
+            # Indent the value if it's multi-line
+            value_lines = value_str.split('\n')
+            if len(value_lines) > 1:
+                indented_value = '\n'.join(['    ' + line if idx > 0 else line for idx, line in enumerate(value_lines)])
+            else:
+                indented_value = value_str
+            f.write(f'    "{key}": {indented_value},\n')
+        
+        # Write features array opening
+        f.write('    "features": [\n')
+        
+        # Write each feature line by line
+        for i, feat in enumerate(outdict['features']):
+            line = json.dumps(feat, separators=(",", ":"), cls=SerialEncoder)
+            if i < len(outdict['features']) - 1:
+                f.write(line + ",\n")
+            else:
+                f.write(line + "\n")
+        
+        # Close features array and main object
+        f.write('    ]\n')
+        f.write('}')
+
+def global_metadata(data_version, software_version=None):
+    extra_metadata = {}
+    if software_version:
+        extra_metadata['software_build_version'] = software_version
+    else:
+        cmd = ["git", "symbolic-ref", "-q", "--short", "HEAD", "||", "git", "describe", "--tags", "--exact-match"]
+        output = subprocess.run(" ".join(cmd), shell=True, capture_output=True)
+        if output.returncode != 0:
+            raise RuntimeError(output.stderr.decode("utf-8"))
+        extra_metadata['software_build_version'] = output.stdout.decode("utf-8").replace("\n", "")
+
+    extra_metadata['product_version'] = data_version
+    extra_metadata['keywords'] = "Imaging Spectroscopy, minerals, EMIT, dust, radiative forcing"
+    extra_metadata['sensor'] = "EMIT (Earth Surface Mineral Dust Source Investigation)"
+    extra_metadata['instrument'] = "EMIT"
+    extra_metadata['platform'] = "ISS"
+    extra_metadata['Conventions'] = "CF-1.63"
+    extra_metadata['institution'] = "NASA Jet Propulsion Laboratory/California Institute of Technology"
+    extra_metadata['license'] = "https://science.nasa.gov/earth-science/earth-science-data/data-information-policy/"
+    extra_metadata['naming_authority'] = "LPDAAC"
+    extra_metadata['date_created'] = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    extra_metadata['keywords_vocabulary'] = "NASA Global Change Master Directory (GCMD) Science Keywords"
+    extra_metadata['stdname_vocabulary'] = "NetCDF Climate and Forecast (CF) Metadata Convention"
+    extra_metadata['creator_name'] = "Jet Propulsion Laboratory/California Institute of Technology"
+    extra_metadata['creator_url'] = "https://earth.jpl.nasa.gov/emit/"
+    extra_metadata['project'] = "Earth Surface Mineral Dust Source Investigation"
+    extra_metadata['project_url'] = "https://earth.jpl.nasa.gov/emit/"
+    extra_metadata['publisher_name'] = "NASA LPDAAC"
+    extra_metadata['publisher_url'] = "https://lpdaac.usgs.gov"
+    extra_metadata['publisher_email'] = "lpdaac@usgs.gov"
+    extra_metadata['identifier_product_doi_authority'] = "https://doi.org"
+    extra_metadata['title'] = "EMIT"
+    extra_metadata['Units']= 'ppm m'
+    return extra_metadata
+
+
+def get_metadata(plume_dict, global_metadata):
+    scene_names = []
+    for _s in range(len(plume_dict['properties']['Scene FIDs'])):
+        fid =plume_dict['properties']['Scene FIDs'][_s]
+        scene =plume_dict['properties']['DAAC Scene Numbers'][_s]
+        orbit =plume_dict['properties']['Orbit']
+        scene_names.append(f'EMIT_L2B_CH4ENH_{global_metadata["product_version"]}_{fid[4:12]}T{fid[13:19]}_{orbit}_{scene}')
+
+    metadata = {
+            'Plume_Complex': plume_dict['properties']['Plume ID'],
+            #'Estimated_Uncertainty_ppmm': plume_dict['properties']['Concentration Uncertainty (ppm m)'],
+            'UTC_Time_Observed': plume_dict['properties']['UTC Time Observed'],
+            #Source_Scenes - match full conventions 
+            'Source_Scenes': ','.join(scene_names),
+            'Latitude of max concentration': plume_dict['properties']['Latitude of max concentration'],
+            'Longitude of max concentration': plume_dict['properties']['Longitude of max concentration'],
+            'Max Plume Concentration (ppm m)': plume_dict['properties']['Max Plume Concentration (ppm m)'],
+            }
+    metadata.update(global_metadata)
+    return metadata
+
+def plume_delivery_basename(outdir, feat):
+    return os.path.join(outdir, feat['properties']['Scene FIDs'][0][4:12], feat['properties']['Scene FIDs'][0] + '_' + feat['properties']['Plume ID'])
+def plume_working_basename(outdir, feat):
+    return os.path.join(outdir, feat['properties']['Plume ID'])
+    
 
 
 def main(input_args=None):
@@ -365,6 +647,7 @@ def main(input_args=None):
     parser.add_argument('key', type=str,  metavar='INPUT_DIR', help='input directory')   
     parser.add_argument('id', type=str,  metavar='INPUT_DIR', help='input directory')   
     parser.add_argument('out_dir', type=str,  metavar='OUTPUT_DIR', help='output directory')   
+    parser.add_argument('data_version', type=str)
     parser.add_argument('--type', type=str,  choices=['ch4','co2'], default='ch4')   
     parser.add_argument('--database_config', type=str,  default='/store/emit/ops/repos/emit-main/emit_main/config/ops_sds_config.json')   
     parser.add_argument('--loglevel', type=str, default='DEBUG', help='logging verbosity')    
@@ -387,34 +670,53 @@ def main(input_args=None):
     except:
         raise AttributeError('Could not open databse - check args.database_config')
 
+    '''
+    Major Steps, at each iteration of the loop:
+
+    1. Download the latest plume annotations, and intersect them with coverage to add FIDS, Orbits, etc.  ID new plumes during this
+    2. Find all DCIDs that have new plumes, and mosaic each 
+    3. Step through each plume in the DCID, cut it out, calculate stats and metadata
+    4. Prep each plume for delivery, writing output files
+    5. Merge all plumes into single output metadata, merge all plumes within a DCID to a single COG / tiled dataset
+
+    Note that previously, the necessity of the background calculation required an extra iteration through each DCID in 3, which was costly.
+    Removing the need for the background calcluation eliminates this step, and it has been cut out of the code for speed.
+    '''
+
+    # Global File names
+    annotation_file_raw = os.path.join(args.out_dir, "manual_annotation_raw.json") # Straight from MMGIS
+    annotation_file = os.path.join(args.out_dir, "manual_annotation.json") # MMGIS + FIDs + Orbits 
+    previous_annotation_file = os.path.join(args.out_dir, "previous_manual_annotation.json") # Last editted version of annotation file
+    output_json = os.path.join(args.out_dir, 'combined_plume_metadata.json') # Output (public facing) metadata file
+    delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
+    os.makedirs(delivery_dir, exist_ok=True)
+
+
     for run in range(max_runs):
         logging.debug('Loading Data')
-        previous_annotation_file = os.path.join(args.out_dir, "previous_manual_annotation.json")
-        annotation_file = os.path.join(args.out_dir, "manual_annotation.json")
-        print_and_call(f'curl "https://popo.jpl.nasa.gov/mmgis/API/files/getfile" -H "Authorization:Bearer {args.key}" --data-raw "id={args.id}" > {annotation_file}')
-        manual_annotations = json.load(open(annotation_file,'r'))['body']['geojson']
+        ######## Step 1 ###########
+
+        # Update annotations file load
+        print_and_call(f'curl "https://popo.jpl.nasa.gov/mmgis/API/files/getfile" -H "Authorization:Bearer {args.key}" --data-raw "id={args.id}" > {annotation_file_raw}')
+        manual_annotations = json.load(open(annotation_file_raw,'r'))['body']['geojson']
         for _feat in range(len(manual_annotations['features'])):
             manual_annotations['features'][_feat]['properties']['Plume ID'] = manual_annotations['features'][_feat]['properties'].pop('name')
-
-
         manual_annotations_previous = None
         if os.path.isfile(previous_annotation_file):
             manual_annotations_previous = json.load(open(previous_annotation_file,'r'))
 
+
+        # Reload coverage file load
         coverage = json.load(open(args.track_coverage_file,'r'))
 
-
-
-        logging.debug('Set up outputs')
-        output_json = os.path.join(args.out_dir, 'combined_plume_metadata.json')
+        logging.debug('Load pre-existing public-facing outputs (combined)')
         outdict = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84" }, "type": "name"},"features":[],"name":"methane_metadata","type":"FeatureCollection" }
         if os.path.isfile(output_json):
             outdict = json.load(open(output_json,'r'))
 
-
-
         logging.debug('Run Spatial-Temporal Intersection to find FIDs')
         manual_annotations, new_plumes = add_fids(manual_annotations, coverage, manual_annotations_previous)
+        logging.info(f'New plume, post fid: {len(new_plumes)}')
         manual_annotations_df = pd.json_normalize(manual_annotations['features'])
         most_recent_plume_create = pd.to_datetime(manual_annotations_df['properties.Time Created']).max()
         last_time_range = pd.to_datetime(manual_annotations_df['properties.Time Range End']).dt.tz_localize('UTC').max()
@@ -425,9 +727,13 @@ def main(input_args=None):
         r0_review_needed = np.sum(pd.to_datetime(coverage_df['properties.end_time']) > last_time_range)
 
         double_approved_count = np.sum([ np.all([x['properties'][k] for k in ['R1 - Reviewed', 'R1 - VISIONS', 'R2 - Reviewed', 'R2 - VISIONS']]) for x in manual_annotations['features']])
+        populated_emission_count = np.sum([ np.all([x['properties'][k] for k in ['R1 - Reviewed', 'R1 - VISIONS', 'R2 - Reviewed', 'R2 - VISIONS']]) and x['properties']['Simple IME Valid'] != 'NA' for x in manual_annotations['features']])
+        reporting_emission_count = np.sum([ np.all([x['properties'][k] for k in ['R1 - Reviewed', 'R1 - VISIONS', 'R2 - Reviewed', 'R2 - VISIONS']]) and x['properties']['Simple IME Valid'] == 'Yes' for x in manual_annotations['features']])
         r1_review_count = np.sum([ x['properties']['R1 - Reviewed'] is False for x in manual_annotations['features']])
         r2_review_count = np.sum([ np.all([x['properties'][k] for k in ['R1 - Reviewed', 'R1 - VISIONS']]) and not x['properties']['R2 - Reviewed'] for x in manual_annotations['features']])
         logging.info(f'Plume Complexes Approved for VISIONS: {double_approved_count}')
+        logging.info(f'Approved Plume Complexes with Simple IME Evaluated: {populated_emission_count}')
+        logging.info(f'Plume Complexes with Emission Estimate: {reporting_emission_count}')
         logging.info(f'R1 Review Deck: {r1_review_count}')
         logging.info(f'R2 Review Deck: {r2_review_count}')
         logging.info(f'Most Recent R0 Plume Created: {most_recent_plume_create}')
@@ -441,7 +747,11 @@ def main(input_args=None):
 
         logging.debug('Querry the EMIT DB to add Orbits and DCIDs')
         manual_annotations, new_plumes     = add_orbits(manual_annotations, new_plumes, database)
+        logging.info(f'New plume, post orbit: {len(new_plumes)}')
 
+
+
+        ######## Step 2 ###########
         unique_fids = np.unique([sublist for x in new_plumes for sublist in manual_annotations['features'][x]['properties']['fids']])
         unique_orbits = np.unique([manual_annotations['features'][x]['properties']['orbit'] for x in new_plumes]).tolist()
         unique_dcids = np.unique([manual_annotations['features'][x]['properties']['dcid'] for x in new_plumes]).tolist()
@@ -457,89 +767,23 @@ def main(input_args=None):
 
 
         # Now step through each DCID, get the relevant FIDs, mosaic, and cut out each plume
-        for dcid in unique_dcids:
+        for dcid in unique_dcids[:1]:
 
-            logging.debug(f'Processing DCID {dcid}...')
-            plumes_idx_in_dcid = [x for x in range(len(manual_annotations['features'])) if manual_annotations['features'][x]['properties']['dcid'] == dcid]
-            this_dcid_manual_annotations = deepcopy(manual_annotations)
-            this_dcid_manual_annotations['features'] = [this_dcid_manual_annotations['features'][x] for x in plumes_idx_in_dcid]
-
+            logging.info(f'Processing DCID {dcid}...')
+            #plumes_idx_in_dcid = [x for x in range(len(manual_annotations['features'])) if manual_annotations['features'][x]['properties']['dcid'] == dcid]
+            plumes_idx_in_dcid = [x for x in new_plumes if manual_annotations['features'][x]['properties']['dcid'] == dcid]
             fids_in_dcid = np.unique([sublist for x in plumes_idx_in_dcid for sublist in manual_annotations['features'][x]['properties']['fids']])
-            logging.debug(f'...found {len(this_dcid_manual_annotations["features"])} plumes and {len(fids_in_dcid)} FIDs')
+            logging.info(f'...found {len(plumes_idx_in_dcid)} plumes to update and {len(fids_in_dcid)} FIDs')
 
             ort_dat_files = [get_sds_cog(fid, dtype=args.type) for fid in fids_in_dcid]
             dcid_ort_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.vrt')
             dcid_ort_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.tif')
-            print_and_call(f'gdalbuildvrt {dcid_ort_vrt_file} {" ".join(ort_dat_files)}')
-            print_and_call(f'gdal_translate {dcid_ort_vrt_file} {dcid_ort_tif_file} -co COMPRESS=LZW')
+            print_and_call(f'gdalbuildvrt {dcid_ort_vrt_file} {" ".join(ort_dat_files)} --quiet')
+            print_and_call(f'gdal_translate {dcid_ort_vrt_file} {dcid_ort_tif_file} -co COMPRESS=LZW --quiet')
 
             ort_ds = gdal.Open(dcid_ort_tif_file)
             ortdat = ort_ds.ReadAsArray().squeeze()
             trans = ort_ds.GetGeoTransform()
-
-            # Use the manual plumes to come up with a new set of plume masks and labels
-            dcid_mask_tif_files = []
-            dcid_mask_poly_files = []
-            for newp in plumes_idx_in_dcid:
-                feat = manual_annotations['features'][newp]
-                rawspace_coords = rawspace_coordinate_conversion([], feat['geometry']['coordinates'][0], trans, ortho=True)
-                manual_mask = rasterize(shapes=[Polygon(rawspace_coords)], out_shape=(ortdat.shape[0],ortdat.shape[1])) # numpy binary mask for manual IDs
-
-                plumestyle = 'classic'
-                if 'Delineation Mode' in feat['properties'].keys():
-                    plumestyle = feat['properties']['Delineation Mode']
-
-                loc_fid_mask = None
-                if plumestyle == 'classic':
-                    loc_fid_mask = plume_mask_threshold(ortdat.copy(), manual_mask, style=args.type)
-                elif plumestyle == 'manual':    
-                    loc_fid_mask = manual_mask.astype(bool)
-
-                loc_fid_mask, newp_trans = trim_plume(loc_fid_mask, trans)
-
-                outmask_finepoly_file = os.path.join(args.out_dir, f'{feat["properties"]["Plume ID"]}_finepolygon.json')
-                outmask_poly_file = os.path.join(args.out_dir, f'{feat["properties"]["Plume ID"]}_polygon.json')
-                outmask_ort_file = os.path.join(args.out_dir, f'{feat["properties"]["Plume ID"]}_mask_ort.tif')
-                write_output_file(ort_ds, loc_fid_mask, outmask_ort_file)
-                print_and_call(f'rm {outmask_poly_file}; rm {outmask_finepoly_file}')
-                print_and_call(f'gdal_polygonize.py {outmask_ort_file} {outmask_finepoly_file} -f GeoJSON -mask {outmask_ort_file} -8')
-                print_and_call(f'ogr2ogr {outmask_poly_file} {outmask_finepoly_file} -f GeoJSON -lco RFC7946=YES -simplify {trans[1]}')
-                dcid_mask_tif_files.append(outmask_ort_file)
-                dcid_mask_poly_files.append(outmask_poly_file)
-
-
-            # Now collect everything from the FID....new and old
-            full_dcid_mask = np.zeros((ortdat.shape[0],ortdat.shape[1]),dtype=bool) # mask of where plumes are in fid
-            plume_labels = np.zeros((ortdat.shape[0],ortdat.shape[1]),dtype=int) # labels of individual plumes in fid
-
-            plume_polygons = {}
-            for _dcid_poly_file in range(len(dcid_mask_poly_files)):
-                
-                plume_to_add = json.load(open(dcid_mask_poly_files[_dcid_poly_file]))['features']
-                if len(plume_to_add) > 1:
-                    logging.warning(f'ACK - multiple polygons from one Plume ID in file {dcid_mask_poly_files[_dcid_poly_file]}')
-                plume_to_add = plume_to_add[0]
-
-                loc_dcid_mask = np.squeeze(gdal.Open(dcid_mask_tif_files[_dcid_poly_file]).ReadAsArray()).astype(bool)
-                full_dcid_mask[loc_dcid_mask] = 1
-                plume_labels[loc_dcid_mask] = _dcid_poly_file+1
-
-                plume_id = os.path.basename(dcid_mask_poly_files[_dcid_poly_file]).replace('_polygon.json','') 
-                match_idx = np.unique([x for x, matchfeat in enumerate(this_dcid_manual_annotations['features']) if matchfeat['properties']['Plume ID'] == plume_id])
-                if len(match_idx) > 1:
-                    logging.warning('ACK - We intersected against multiple plumes')
-                    continue
-                if len(match_idx) == 0:
-                    logging.warning('ACK - We couldnt find an intersection')
-                    continue
-                match_idx = match_idx[0]
-
-                plume_polygons[str(_dcid_poly_file + 1)] = this_dcid_manual_annotations['features'][match_idx]['properties']
-                plume_polygons[str(_dcid_poly_file + 1)]['geometry'] = plume_to_add['geometry']
-
-            color_ort_file = os.path.join(args.out_dir, f'{dcid}_color_ort.tif')
-            write_color_plume(ortdat, full_dcid_mask, ort_ds, color_ort_file, style=args.type)
-
 
             # Calculate pixel size for DCID
             proj_ds = gdal.Warp('', dcid_ort_tif_file, dstSRS='EPSG:3857', format='VRT')
@@ -548,133 +792,297 @@ def main(input_args=None):
             ysize_m = transform_3857[5]
             del proj_ds
 
+            ######## Step 3 ##############
+            # Use the manual plumes to come up with a new set of plume masks and labels
+            #dcid_mask_tif_files = []
+            #dcid_mask_poly_files = []
+            combined_mask = None
+            updated_plumes_poly, updated_plumes_point = [], [] 
+            for newp in plumes_idx_in_dcid:
+                feat = manual_annotations['features'][newp]
+                logging.info(f'Building output plume {feat["properties"]["Plume ID"]}')
 
+                rawspace_coords = rawspace_coordinate_conversion([], feat['geometry']['coordinates'][0], trans, ortho=True)
+                manual_mask = rasterize(shapes=[Polygon(rawspace_coords)], out_shape=(ortdat.shape[0],ortdat.shape[1])) # numpy binary mask for manual IDs
 
+                plumestyle = 'classic'
+                if 'Delineation Mode' in feat['properties'].keys():
+                    plumestyle = feat['properties']['Delineation Mode']
 
-
-            # Now step through each plume in the DCID for its custom outputs 
-            un_labels = np.unique(plume_labels)[1:]
-            for lab in un_labels:
-
-                props = {}
-                loc_pp = plume_polygons[str(int(lab))]
-                props['Plume ID'] = loc_pp['Plume ID']
-                props["Data Download"] = get_daac_link(loc_pp['Plume ID'])
-                # Maybe...might be misnamed
-                props['Scene FIDs'] = loc_pp['fids']
-                props['Orbit'] = loc_pp['orbit']
-                props['DCID'] = loc_pp['dcid']
-                props['DAAC Scene Numbers'] = loc_pp['daac_scenes']
-
-
-
-                background = np.round(np.nanstd(ortdat[plume_labels == lab]))
-                start_datetime = datetime.datetime.strptime(fids_in_dcid[0][4:], "%Y%m%dt%H%M%S")
-                end_datetime = start_datetime + datetime.timedelta(seconds=1)
-
-                start_datetime = start_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
-                end_datetime = end_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-               
+                loc_fid_mask = None # change name to dcid_plume_mask
+                if plumestyle == 'classic':
+                    loc_fid_mask = plume_mask_threshold(ortdat.copy(), manual_mask, style=args.type)
+                elif plumestyle == 'manual':    
+                    loc_fid_mask = manual_mask.astype(bool)
                 
-                maxval = np.nanmax(ortdat[plume_labels == lab])
-                if np.sum(plume_labels == lab) < 5 or maxval < 200 or np.isnan(maxval):
-                    continue
-
-                rawloc = np.where(np.logical_and(ortdat == maxval, plume_labels == lab))
-                maxval = np.round(maxval)
-
-                #sum and convert to kg.  conversion:
-                # ppm m / 1e6 ppm * x_pixel_size(m)*y_pixel_size(m) 1e3 L / m^3 * 1 mole / 22.4 L * 0.01604 kg / mole
-                ime_scaler = (1.0/1e6)* ((np.abs(xsize_m*ysize_m))/1.0) * (1000.0/1.0) * (1.0/22.4)*(0.01604/1.0)
-
-                ime_ss = ortdat[plume_labels == lab].copy()
-                ime = np.nansum(ime_ss) * ime_scaler
-                ime_p = np.nansum(ime_ss[ime_ss > 0]) * ime_scaler
-
-                ime = np.round(ime,2)
-                ime_uncert = np.round(np.sum(plume_labels == lab) * background * ime_scaler,2)
-
-                max_loc_y = trans[3] + trans[5]*(rawloc[0][0]+0.5)
-                max_loc_x = trans[0] + trans[1]*(rawloc[1][0]+0.5)
-
-                props["UTC Time Observed"] = start_datetime
-                props["map_endtime"] = end_datetime
-                props["Max Plume Concentration (ppm m)"] = maxval
-                props["Concentration Uncertainty (ppm m)"] = background
-                #props["Integrated Methane Enhancement (kg CH4)"] = ime
-                #props["Integrated Methane Enhancement - Positive (kg CH4)"] = ime_p
-                #props["Integrated Methane Enhancement Uncertainty (kg CH4)"] = ime_uncert
-                props["Latitude of max concentration"] = max_loc_y
-                props["Longitude of max concentration"] = max_loc_x
-                
-
-                # For R1 Review
-                if not loc_pp['R1 - Reviewed']:
-                    props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "red", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
-                
-                # For R2 Review
-                if loc_pp['R1 - Reviewed'] and loc_pp['R1 - VISIONS'] and not loc_pp['R2 - Reviewed']:
-                    props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "green", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
-
-                # Accept
-                if loc_pp['R1 - Reviewed'] and loc_pp['R1 - VISIONS'] and loc_pp['R2 - Reviewed'] and loc_pp['R2 - VISIONS']:
-                    props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "white", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
-                
-                # Reject
-                if (loc_pp['R1 - Reviewed'] and not loc_pp['R1 - VISIONS']) or (loc_pp['R2 - Reviewed'] and not loc_pp['R2 - VISIONS']):
-                    props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "yellow", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
-
-                loc_res = {"geometry": loc_pp['geometry'],
-                           "type": "Feature",
-                           "properties": props}
-
-                props['style']['radius'] = 10
-                point_res = {"geometry": {"coordinates": [max_loc_x, max_loc_y, 0.0], "type": "Point"},
-                           "properties": props,
-                           "type": "Feature"}
-
-                # First add in polygon
-                existing_match_index = [_x for _x, x in enumerate(outdict['features']) if props['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] != 'Point']
-                if len(existing_match_index) > 2:
-                    logging.warning("HELP! Too many matching indices")
-                if len(existing_match_index) > 0:
-                    outdict['features'][existing_match_index[0]] = loc_res
+                if combined_mask is None:
+                    combined_mask = loc_fid_mask.copy()
                 else:
-                    outdict['features'].append(loc_res)
+                    combined_mask = np.logical_or(combined_mask, loc_fid_mask)
+
+                cut_plume_mask, newp_trans = trim_plume(loc_fid_mask, trans)
+                tocut = ortdat.copy()
+                tocut[loc_fid_mask == 0] = -9999
+                cut_plume_data, _ = trim_plume(tocut, trans, nodata_value=-9999)
+
+
+
+                ############  Step 4 ###########
+                outbase = plume_working_basename(args.out_dir, feat)
+                #outmask_finepoly_file = os.path.join(args.out_dir, f'{feat["properties"]["Plume ID"]}_finepolygon.json')
+                #outmask_poly_file = os.path.join(args.out_dir, f'{feat["properties"]["Plume ID"]}_polygon.json')
+                #outmask_ort_file = os.path.join(args.out_dir, f'{feat["properties"]["Plume ID"]}_mask_ort.tif')
+                outmask_finepoly_file = os.path.join(outbase + '_finepolygon.json')
+                outmask_poly_file = os.path.join(outbase + '_polygon.json')
+                outmask_ort_file = os.path.join(outbase + '_mask_ort.tif')
+
+                # Write mask file and save tif reference
+                #write_output_file(newp_trans, ort_ds.GetProjection(), cut_plume_mask, outmask_ort_file)
+                #write_output_file(newp_trans, ort_ds.GetProjection(), cut_plume_data, outmask_ort_file)
+                write_cog(outmask_ort_file, cut_plume_mask.reshape((cut_plume_mask.shape[0], cut_plume_mask.shape[1],1)).astype(np.uint8), 
+                          newp_trans, ort_ds.GetProjection(), nodata_value=0)
                 
-                # Now add in point
-                existing_match_index = [_x for _x, x in enumerate(outdict['features']) if props['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] == 'Point']
-                if len(existing_match_index) > 2:
-                    logging.warning("HELP! Too many matching indices")
-                if len(existing_match_index) > 0:
-                    outdict['features'][existing_match_index[0]] = point_res
-                else:
-                    outdict['features'].append(point_res)
+                if os.path.isfile(outmask_poly_file):
+                    os.remove(outmask_poly_file)
+                if os.path.isfile(outmask_finepoly_file):
+                    os.remove(outmask_finepoly_file)
+                print_and_call(f'gdal_polygonize {outmask_ort_file} {outmask_finepoly_file} -f GeoJSON -mask {outmask_ort_file} -8 -quiet')
+                print_and_call(f'ogr2ogr {outmask_poly_file} {outmask_finepoly_file} -f GeoJSON -lco RFC7946=YES -simplify {trans[1]} --quiet')
 
-            # Write JSON to output file
-            outdict['crs']['properties']['last_updated'] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            with open(output_json, 'w') as fout:
-                fout.write(json.dumps(outdict, cls=SerialEncoder, sort_keys=True)) 
+                ## Save a running tile of the ort files and polygon files for this DCID, only for mosaicing
+                #dcid_mask_tif_files.append(outmask_ort_file)
+                #dcid_mask_poly_files.append(outmask_poly_file)
 
-            # Tile and Sync
-            date=fids_in_dcid[0][4:]
-            ftime=fids_in_dcid[0].split('t')[-1].split('_')[0]
-            tile_dir = os.path.join(args.out_dir, 'tiled_' + args.type)
-            if os.path.isdir(tile_dir) is False:
-                os.mkdir(tile_dir)
-            od_date = f'{date[:4]}-{date[4:6]}-{date[6:8]}T{ftime[:2]}_{ftime[2:4]}_{ftime[4:]}Z-to-{date[:4]}-{date[4:6]}-{date[6:8]}T{ftime[:2]}_{ftime[2:4]}_{str(int(ftime[4:6])+1):02}Z'
+                # Read back in the polygon we just wrote
+                plume_to_add = json.load(open(outmask_poly_file))['features']
+                if len(plume_to_add) > 1:
+                    logging.warning(f'ACK - multiple polygons from one Plume ID in file {outmask_poly_file}')
+                plume_to_add[0]['geometry']['coordinates'] = [[np.round(x[0],5), np.round(x[1],5)] for x in plume_to_add[0]['geometry']['coordinates'][0]]
 
-            if os.path.isdir(f'{tile_dir}/{od_date}'):
-                print_and_call(f'rm -r {tile_dir}/{od_date}')
-            ##cmd_str = f'gdal2tiles.py -z 2-12 --srcnodata 0 --processes=40 -r antialias {color_ort_file} {tile_dir}/{od_date} -x'
-            ##subprocess.call(cmd_str, shell=True)
-            #print_and_call(f'rsync -a --info=progress2 {tile_dir}/{od_date}/ brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/mosaics/{args.type}_plume_tiles_working/{od_date}/ --delete')
+                poly_plume, point_plume = build_plume_properties(feat['properties'], plume_to_add[0]['geometry'], cut_plume_data, 
+                                                                 newp_trans, args.data_version, xsize_m, ysize_m)
+                updated_plumes_point.append(point_plume)
+                updated_plumes_poly.append(poly_plume)
 
-            print_and_call(f'cp {previous_annotation_file} {os.path.splitext(previous_annotation_file)[0] + "_oneback.json"}')
-            print_and_call(f'cp {annotation_file} {previous_annotation_file}')
-            #print_and_call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/converted_manual_{args.type}_plumes.json')
-            ##subprocess.call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/scenetest_plumes.json',shell=True)
+
+                # These are the real delivery files
+                delivery_base = plume_delivery_basename(delivery_dir, poly_plume)
+                os.makedirs(os.path.dirname(delivery_base), exist_ok=True)
+
+                delivery_raster_file = os.path.join(delivery_base + '.tif')
+                delivery_ql_file = os.path.join(delivery_base + '.png')
+                delivery_json_file = os.path.join(delivery_base + '.json')
+
+                meta = get_metadata(poly_plume, global_metadata(data_version=args.data_version))
+                write_cog(delivery_raster_file, cut_plume_data.reshape((cut_plume_data.shape[0], cut_plume_data.shape[1],1)).astype(np.uint8), 
+                          newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
+                write_color_quicklook(cut_plume_data, delivery_ql_file)
+                write_json(delivery_json_file, poly_plume, meta['Source_Scenes'])
+
+        ########## Step 5 ##########
+        for plm in updated_plumes_poly:
+            existing_match_index = [_x for _x, x in enumerate(outdict['features']) if plm['properties']['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] != 'Point']
+            if len(existing_match_index) > 2:
+                logging.warning("HELP! Too many matching indices")
+            if len(existing_match_index) > 0:
+                outdict['features'][existing_match_index[0]] = plm
+            else:
+                outdict['features'].append(plm)
+ 
+        for plm in updated_plumes_point:
+            existing_match_index = [_x for _x, x in enumerate(outdict['features']) if plm['properties']['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] == 'Point']
+            if len(existing_match_index) > 2:
+                logging.warning("HELP! Too many matching indices")
+            if len(existing_match_index) > 0:
+                outdict['features'][existing_match_index[0]] = plm
+            else:
+                outdict['features'].append(plm)
+
+        write_geojson_linebyline(output_json, outdict) # Final write
+
+
+        # Sync
+        print_and_call(f'cp {annotation_file} {previous_annotation_file}')
+        #print_and_call(f'rsync -a --info=progress2 {tile_dir}/{od_date}/ brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/mosaics/{args.type}_plume_tiles_working/{od_date}/ --delete')
+        #print_and_call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/converted_manual_{args.type}_plumes.json')
+
+            # Estimating the background would require going through *ALL* plumes in the DCID, not just the new ones
+            #background = ortdat[np.logical_and(combined_mask == 0, ortdat != -9999)]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            ## Now collect everything from the FID....new and old
+            #full_dcid_mask = np.zeros((ortdat.shape[0],ortdat.shape[1]),dtype=bool) # mask of where plumes are in fid
+            #plume_labels = np.zeros((ortdat.shape[0],ortdat.shape[1]),dtype=int) # labels of individual plumes in fid
+
+            #plume_polygons = {}
+            #for _dcid_poly_file in range(len(dcid_mask_poly_files)):
+            #    
+            #    plume_to_add = json.load(open(dcid_mask_poly_files[_dcid_poly_file]))['features']
+            #    if len(plume_to_add) > 1:
+            #        logging.warning(f'ACK - multiple polygons from one Plume ID in file {dcid_mask_poly_files[_dcid_poly_file]}')
+            #    plume_to_add = plume_to_add[0]
+
+            #    loc_dcid_mask = np.squeeze(gdal.Open(dcid_mask_tif_files[_dcid_poly_file]).ReadAsArray()).astype(bool)
+            #    full_dcid_mask[loc_dcid_mask] = 1
+            #    plume_labels[loc_dcid_mask] = _dcid_poly_file+1
+
+            #    plume_id = os.path.basename(dcid_mask_poly_files[_dcid_poly_file]).replace('_polygon.json','') 
+            #    match_idx = np.unique([x for x, matchfeat in enumerate(this_dcid_manual_annotations['features']) if matchfeat['properties']['Plume ID'] == plume_id])
+            #    if len(match_idx) > 1:
+            #        logging.warning('ACK - We intersected against multiple plumes')
+            #        continue
+            #    if len(match_idx) == 0:
+            #        logging.warning('ACK - We couldnt find an intersection')
+            #        continue
+            #    match_idx = match_idx[0]
+
+            #    plume_polygons[str(_dcid_poly_file + 1)] = this_dcid_manual_annotations['features'][match_idx]['properties']
+            #    plume_polygons[str(_dcid_poly_file + 1)]['geometry'] = plume_to_add['geometry']
+
+            #color_ort_file = os.path.join(args.out_dir, f'{dcid}_color_ort.tif')
+            #write_color_plume(ortdat, full_dcid_mask, ort_ds, color_ort_file, style=args.type)
+
+
+
+
+
+
+
+        #    # Now step through each plume in the DCID for its custom outputs 
+        #    un_labels = np.unique(plume_labels)[1:]
+        #    for lab in un_labels:
+
+        #        props = {}
+        #        loc_pp = plume_polygons[str(int(lab))]
+        #        props['Plume ID'] = loc_pp['Plume ID']
+        #        props["Data Download"] = get_daac_link(loc_pp['Plume ID'])
+        #        # Maybe...might be misnamed
+        #        props['Scene FIDs'] = loc_pp['fids']
+        #        props['Orbit'] = loc_pp['orbit']
+        #        props['DCID'] = loc_pp['dcid']
+        #        props['DAAC Scene Numbers'] = loc_pp['daac_scenes']
+
+
+
+        #        background = np.round(np.nanstd(ortdat[plume_labels == lab]))
+        #        start_datetime = datetime.datetime.strptime(fids_in_dcid[0][4:], "%Y%m%dt%H%M%S")
+        #        end_datetime = start_datetime + datetime.timedelta(seconds=1)
+
+        #        start_datetime = start_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
+        #        end_datetime = end_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        #       
+        #        
+        #        maxval = np.nanmax(ortdat[plume_labels == lab])
+        #        if np.sum(plume_labels == lab) < 5 or maxval < 200 or np.isnan(maxval):
+        #            continue
+
+        #        rawloc = np.where(np.logical_and(ortdat == maxval, plume_labels == lab))
+        #        maxval = np.round(maxval)
+
+        #        #sum and convert to kg.  conversion:
+        #        # ppm m / 1e6 ppm * x_pixel_size(m)*y_pixel_size(m) 1e3 L / m^3 * 1 mole / 22.4 L * 0.01604 kg / mole
+        #        ime_scaler = (1.0/1e6)* ((np.abs(xsize_m*ysize_m))/1.0) * (1000.0/1.0) * (1.0/22.4)*(0.01604/1.0)
+
+        #        ime_ss = ortdat[plume_labels == lab].copy()
+        #        ime = np.nansum(ime_ss) * ime_scaler
+        #        ime_p = np.nansum(ime_ss[ime_ss > 0]) * ime_scaler
+
+        #        ime = np.round(ime,2)
+        #        ime_uncert = np.round(np.sum(plume_labels == lab) * background * ime_scaler,2)
+
+        #        max_loc_y = trans[3] + trans[5]*(rawloc[0][0]+0.5)
+        #        max_loc_x = trans[0] + trans[1]*(rawloc[1][0]+0.5)
+
+        #        props["UTC Time Observed"] = start_datetime
+        #        props["map_endtime"] = end_datetime
+        #        props["Max Plume Concentration (ppm m)"] = maxval
+        #        props["Concentration Uncertainty (ppm m)"] = background
+        #        #props["Integrated Methane Enhancement (kg CH4)"] = ime
+        #        #props["Integrated Methane Enhancement - Positive (kg CH4)"] = ime_p
+        #        #props["Integrated Methane Enhancement Uncertainty (kg CH4)"] = ime_uncert
+        #        props["Latitude of max concentration"] = max_loc_y
+        #        props["Longitude of max concentration"] = max_loc_x
+        #        
+
+        #        # For R1 Review
+        #        if not loc_pp['R1 - Reviewed']:
+        #            props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "red", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+        #        
+        #        # For R2 Review
+        #        if loc_pp['R1 - Reviewed'] and loc_pp['R1 - VISIONS'] and not loc_pp['R2 - Reviewed']:
+        #            props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "green", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+
+        #        # Accept
+        #        if loc_pp['R1 - Reviewed'] and loc_pp['R1 - VISIONS'] and loc_pp['R2 - Reviewed'] and loc_pp['R2 - VISIONS']:
+        #            props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "white", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+        #        
+        #        # Reject
+        #        if (loc_pp['R1 - Reviewed'] and not loc_pp['R1 - VISIONS']) or (loc_pp['R2 - Reviewed'] and not loc_pp['R2 - VISIONS']):
+        #            props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "yellow", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+
+        #        loc_res = {"geometry": loc_pp['geometry'],
+        #                   "type": "Feature",
+        #                   "properties": props}
+
+        #        props['style']['radius'] = 10
+        #        point_res = {"geometry": {"coordinates": [max_loc_x, max_loc_y, 0.0], "type": "Point"},
+        #                   "properties": props,
+        #                   "type": "Feature"}
+
+        #        # First add in polygon
+        #        existing_match_index = [_x for _x, x in enumerate(outdict['features']) if props['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] != 'Point']
+        #        if len(existing_match_index) > 2:
+        #            logging.warning("HELP! Too many matching indices")
+        #        if len(existing_match_index) > 0:
+        #            outdict['features'][existing_match_index[0]] = loc_res
+        #        else:
+        #            outdict['features'].append(loc_res)
+        #        
+        #        # Now add in point
+        #        existing_match_index = [_x for _x, x in enumerate(outdict['features']) if props['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] == 'Point']
+        #        if len(existing_match_index) > 2:
+        #            logging.warning("HELP! Too many matching indices")
+        #        if len(existing_match_index) > 0:
+        #            outdict['features'][existing_match_index[0]] = point_res
+        #        else:
+        #            outdict['features'].append(point_res)
+
+        #    # Write JSON to output file
+        #    outdict['crs']['properties']['last_updated'] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        #    with open(output_json, 'w') as fout:
+        #        fout.write(json.dumps(outdict, cls=SerialEncoder, sort_keys=True)) 
+
+        #    # Tile and Sync
+        #    date=fids_in_dcid[0][4:]
+        #    ftime=fids_in_dcid[0].split('t')[-1].split('_')[0]
+        #    tile_dir = os.path.join(args.out_dir, 'tiled_' + args.type)
+        #    if os.path.isdir(tile_dir) is False:
+        #        os.mkdir(tile_dir)
+        #    od_date = f'{date[:4]}-{date[4:6]}-{date[6:8]}T{ftime[:2]}_{ftime[2:4]}_{ftime[4:]}Z-to-{date[:4]}-{date[4:6]}-{date[6:8]}T{ftime[:2]}_{ftime[2:4]}_{str(int(ftime[4:6])+1):02}Z'
+
+        #    if os.path.isdir(f'{tile_dir}/{od_date}'):
+        #        print_and_call(f'rm -r {tile_dir}/{od_date}')
+        #    ##cmd_str = f'gdal2tiles.py -z 2-12 --srcnodata 0 --processes=40 -r antialias {color_ort_file} {tile_dir}/{od_date} -x'
+        #    ##subprocess.call(cmd_str, shell=True)
+        #    #print_and_call(f'rsync -a --info=progress2 {tile_dir}/{od_date}/ brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/mosaics/{args.type}_plume_tiles_working/{od_date}/ --delete')
+
+        #    print_and_call(f'cp {previous_annotation_file} {os.path.splitext(previous_annotation_file)[0] + "_oneback.json"}')
+        #    print_and_call(f'cp {annotation_file} {previous_annotation_file}')
+        #    #print_and_call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/converted_manual_{args.type}_plumes.json')
+        #    ##subprocess.call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/scenetest_plumes.json',shell=True)
 
  
 if __name__ == '__main__':
