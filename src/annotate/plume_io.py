@@ -247,7 +247,13 @@ def rawspace_coordinate_conversion(glt, coordinates, trans, ortho=False):
     return rawspace_coords
 
 
-def trim_plume(plume_mask, trans, nodata_value=0, buffer=0):
+def trim_plume(plume_mask_in, trans, badmask=None, nodata_value=0, buffer=0):
+
+    plume_mask = plume_mask_in
+    if badmask is not None:
+        plume_mask = plume_mask_in.copy()
+        plume_mask[badmask] = nodata_value
+
     y_locs = np.where(np.sum(plume_mask != nodata_value, axis=1))[0]
     x_locs = np.where(np.sum(plume_mask != nodata_value, axis=0))[0]
 

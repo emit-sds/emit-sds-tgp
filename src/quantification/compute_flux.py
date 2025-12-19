@@ -1051,8 +1051,8 @@ def compute_flux(args):
 def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_ij, imin, imax, jmin, jmax, imefigf, imefigf_zoom, ps):
     off = 5
     
-    circle_min_x, circle_max_x = jmin-off, jmax+off
-    circle_min_y, circle_max_y = imin-off, imax+off
+    circle_min_x, circle_max_x = max(jmin-off, 0), min(jmax+off, pltcmf.shape[1])
+    circle_min_y, circle_max_y = max(imin-off, 0), min(imax+off, pltcmf.shape[0])
 
     if len(manual_boundary_coordinates_ij) > 0:
         plume_x, plume_y = np.array(manual_boundary_coordinates_ij)[:,1], np.array(manual_boundary_coordinates_ij)[:,0]
@@ -1097,10 +1097,10 @@ def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_i
         for a in axes:
             circle = patches.Circle((j,i), maxfetchpx, fill=False, edgecolor='white', linewidth=2)
             a.add_patch(circle)
-            if len(args.manual_boundary_coordinates_lon_lat) > 0:
+            if len(manual_boundary_coordinates_ij) > 0:
                 a.plot(plume_x, plume_y, np.array(manual_boundary_coordinates_ij)[:,0], color = 'white')
 
-    if len(args.manual_boundary_coordinates_lon_lat) > 0:
+    if len(manual_boundary_coordinates_ij) > 0:
         ax[0][0].set_xlim([plume_min_x, plume_max_x])
         ax[0][0].set_ylim([plume_min_y, plume_max_y])
         ax[1][0].set_xlim([plume_min_x, plume_max_x])

@@ -60,7 +60,8 @@ def main(input_args=None):
     parser.add_argument('--logfile', type=str, default=None, help='output file to write log to')    
     parser.add_argument('--continuous', action='store_true', help='run continuously')    
     parser.add_argument('--track_coverage_file', default='/store/brodrick/emit/emit-visuals/track_coverage_pub.json')
-    parser.add_argument('--plume_buffer_px', type=int, default=10, help='number of pixels to buffer plume cutouts by')
+    parser.add_argument('--plume_buffer_px', type=int, default=30, help='number of pixels to buffer plume cutouts by')
+    parser.add_argument('--write_dcid_tifs', action='store_true', help='write out dcid level tifs for debugging')
     args = parser.parse_args(input_args)
 
     logging.basicConfig(format='%(levelname)s:%(asctime)s ||| %(message)s', level=args.loglevel,
@@ -191,10 +192,15 @@ def main(input_args=None):
             dcid_ort_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.vrt')
             dcid_ort_unc_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_unc_ort.vrt')
             dcid_ort_sns_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_sns_ort.vrt')
-            dcid_ort_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.tif')
-            utils.print_and_call(f'gdalbuildvrt {dcid_ort_vrt_file} {" ".join(ort_dat_files)} --quiet')
-            utils.print_and_call(f'gdal_translate {dcid_ort_vrt_file} {dcid_ort_tif_file} -co COMPRESS=LZW --quiet')
 
+            dcid_ort_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.tif')
+            dcid_ort_unc_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_unc_ort.tif')
+            dcid_ort_sns_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_sns_ort.tif')
+            utils.print_and_call(f'gdalbuildvrt {dcid_ort_vrt_file} {" ".join(ort_dat_files)} --quiet')
+            if args.write_dcid_tifs:
+                utils.print_and_call(f'gdal_translate {dcid_ort_vrt_file} {dcid_ort_tif_file} -co COMPRESS=LZW --quiet')
+            else:
+                dcid_ort_tif_file = dcid_ort_vrt_file  # just use the VRT directly to save space/time
 
             ort_ds = gdal.Open(dcid_ort_tif_file)
             ortdat = ort_ds.ReadAsArray().squeeze()
@@ -204,13 +210,16 @@ def main(input_args=None):
             estimate_simple_ime = np.sum([manual_annotations['features'][x]['properties']['Simple IME Valid'] != 'NA' for x in plumes_idx_in_dcid]) > 0
             snsdat, uncdat = None, None
             if estimate_simple_ime:
-                utils.print_and_call(f'gdalbuildvrt {dcid_ort_sns_vrt_file} {" ".join(ort_sens_files)} --quiet')
                 utils.print_and_call(f'gdalbuildvrt {dcid_ort_unc_vrt_file} {" ".join(unc_dat_files)} --quiet')
-                #utils.print_and_call(f'gdaltranslate {dcid_ort_sns_vrt_file} {dcid_ort_sns_vrt_file.replace(".vrt",".tif")} -co COMPRESS=LZW --quiet')
-                #utils.print_and_call(f'gdaltranslate {dcid_ort_unc_vrt_file} {dcid_ort_unc_vrt_file.replace(".vrt",".tif")} -co COMPRESS=LZW --quiet')
-                snsdat = gdal.Open(dcid_ort_sns_vrt_file).ReadAsArray().squeeze()
-                uncdat = gdal.Open(dcid_ort_unc_vrt_file).ReadAsArray().squeeze()
-
+                utils.print_and_call(f'gdalbuildvrt {dcid_ort_sns_vrt_file} {" ".join(ort_sens_files)} --quiet')
+                if args.write_dcid_tifs:
+                    utils.print_and_call(f'gdal_translate {dcid_ort_unc_vrt_file} {dcid_ort_unc_tif_file} -co COMPRESS=LZW --quiet')
+                    utils.print_and_call(f'gdal_translate {dcid_ort_sns_vrt_file} {dcid_ort_sns_tif_file} -co COMPRESS=LZW --quiet')
+                else:
+                    dcid_ort_unc_tif_file = dcid_ort_unc_vrt_file
+                    dcid_ort_sns_tif_file = dcid_ort_sns_vrt_file
+                uncdat = gdal.Open(dcid_ort_unc_tif_file).ReadAsArray().squeeze()
+                snsdat = gdal.Open(dcid_ort_sns_tif_file).ReadAsArray().squeeze()
 
             # Calculate pixel size for DCID
             proj_ds = gdal.Warp('', dcid_ort_tif_file, dstSRS='EPSG:3857', format='VRT')
@@ -218,9 +227,6 @@ def main(input_args=None):
             xsize_m = transform_3857[1]
             ysize_m = transform_3857[5]
             del proj_ds
-
-
-
 
 
 
@@ -252,16 +258,15 @@ def main(input_args=None):
                     combined_mask = np.logical_or(combined_mask, loc_fid_mask)
 
                 cut_plume_mask, newp_trans = plume_io.trim_plume(loc_fid_mask, trans, buffer=args.plume_buffer_px)
-                tocut = ortdat.copy()
-                tocut[loc_fid_mask == 0] = -9999
-                cut_plume_data, _ = plume_io.trim_plume(tocut, trans, nodata_value=-9999, buffer=args.plume_buffer_px)
+                #tocut = ortdat.copy()
+                #tocut[loc_fid_mask == 0] = -9999
+                cut_plume_data, _ = plume_io.trim_plume(ortdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
 
                 if estimate_simple_ime:
-                    uncdat[loc_fid_mask == 0] = -9999
-                    snsdat[loc_fid_mask == 0] = -9999
-                    cut_uncdat, _ = plume_io.trim_plume(uncdat, trans, nodata_value=-9999, buffer=args.plume_buffer_px)
-                    cut_snsdat, _ = plume_io.trim_plume(snsdat, trans, nodata_value=-9999, buffer=args.plume_buffer_px)
-
+                    #uncdat[loc_fid_mask == 0] = -9999
+                    #snsdat[loc_fid_mask == 0] = -9999
+                    cut_uncdat, _ = plume_io.trim_plume(uncdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
+                    cut_snsdat, _ = plume_io.trim_plume(snsdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
 
 
 
