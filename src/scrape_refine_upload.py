@@ -60,6 +60,7 @@ def main(input_args=None):
     parser.add_argument('--logfile', type=str, default=None, help='output file to write log to')    
     parser.add_argument('--continuous', action='store_true', help='run continuously')    
     parser.add_argument('--track_coverage_file', default='/store/brodrick/emit/emit-visuals/track_coverage_pub.json')
+    parser.add_argument('--plume_buffer_px', type=int, default=10, help='number of pixels to buffer plume cutouts by')
     args = parser.parse_args(input_args)
 
     logging.basicConfig(format='%(levelname)s:%(asctime)s ||| %(message)s', level=args.loglevel,
@@ -250,16 +251,16 @@ def main(input_args=None):
                 else:
                     combined_mask = np.logical_or(combined_mask, loc_fid_mask)
 
-                cut_plume_mask, newp_trans = plume_io.trim_plume(loc_fid_mask, trans)
+                cut_plume_mask, newp_trans = plume_io.trim_plume(loc_fid_mask, trans, buffer=args.plume_buffer_px)
                 tocut = ortdat.copy()
                 tocut[loc_fid_mask == 0] = -9999
-                cut_plume_data, _ = plume_io.trim_plume(tocut, trans, nodata_value=-9999)
+                cut_plume_data, _ = plume_io.trim_plume(tocut, trans, nodata_value=-9999, buffer=args.plume_buffer_px)
 
                 if estimate_simple_ime:
                     uncdat[loc_fid_mask == 0] = -9999
                     snsdat[loc_fid_mask == 0] = -9999
-                    cut_uncdat, _ = plume_io.trim_plume(uncdat, trans, nodata_value=-9999)
-                    cut_snsdat, _ = plume_io.trim_plume(snsdat, trans, nodata_value=-9999)
+                    cut_uncdat, _ = plume_io.trim_plume(uncdat, trans, nodata_value=-9999, buffer=args.plume_buffer_px)
+                    cut_snsdat, _ = plume_io.trim_plume(snsdat, trans, nodata_value=-9999, buffer=args.plume_buffer_px)
 
 
 
@@ -287,7 +288,7 @@ def main(input_args=None):
                 plume_to_add = json.load(open(outmask_poly_file))['features']
                 if len(plume_to_add) > 1:
                     logging.warning(f'ACK - multiple polygons from one Plume ID in file {outmask_poly_file}')
-                plume_to_add[0]['geometry']['coordinates'] = [[np.round(x[0],5), np.round(x[1],5)] for x in plume_to_add[0]['geometry']['coordinates'][0]]
+                plume_to_add[0]['geometry']['coordinates'] = [[[np.round(x[0],5), np.round(x[1],5)] for x in plume_to_add[0]['geometry']['coordinates'][0]]]
 
                 poly_plume, point_plume = utils.build_plume_properties(feat['properties'], plume_to_add[0]['geometry'], cut_plume_data, 
                                                                        newp_trans, args.data_version, xsize_m, ysize_m)
@@ -303,18 +304,18 @@ def main(input_args=None):
                 delivery_raster_file = os.path.join(delivery_base + '.tif')
                 delivery_ql_file = os.path.join(delivery_base + '.png')
                 delivery_json_file = os.path.join(delivery_base + '.json')
-                delivery_uncert_file = delivery_raster_file.replace(args.type.upper(), args.type.upper() + '_UNC_')
-                delivery_sens_file = delivery_raster_file.replace(args.type.upper(), args.type.upper() + '_SNS_')
+                delivery_uncert_file = delivery_raster_file.replace(args.type.upper(), args.type.upper() + '_UNC')
+                delivery_sens_file = delivery_raster_file.replace(args.type.upper(), args.type.upper() + '_SNS')
 
                 meta = plume_io.get_metadata(poly_plume, plume_io.global_metadata(data_version=args.data_version))
-                plume_io.write_cog(delivery_raster_file, cut_plume_data.reshape((cut_plume_data.shape[0], cut_plume_data.shape[1],1)).astype(np.uint8), 
+                plume_io.write_cog(delivery_raster_file, cut_plume_data.reshape((cut_plume_data.shape[0], cut_plume_data.shape[1],1)).astype(np.float32), 
                           newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
                 plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file)
 
                 if estimate_simple_ime:
-                    plume_io.write_cog(delivery_uncert_file, cut_uncdat.reshape((cut_uncdat.shape[0], cut_uncdat.shape[1],1)).astype(np.uint8), 
+                    plume_io.write_cog(delivery_uncert_file, cut_uncdat.reshape((cut_uncdat.shape[0], cut_uncdat.shape[1],1)).astype(np.float32), 
                               newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
-                    plume_io.write_cog(delivery_sens_file, cut_snsdat.reshape((cut_snsdat.shape[0], cut_snsdat.shape[1],1)).astype(np.uint8), 
+                    plume_io.write_cog(delivery_sens_file, cut_snsdat.reshape((cut_snsdat.shape[0], cut_snsdat.shape[1],1)).astype(np.float32), 
                               newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
 
 
@@ -352,7 +353,9 @@ def main(input_args=None):
                             self.rgbimgf = None
                             self.labimgf = None
 
-                            self.log_level = args.loglevel
+                            #self.log_level = args.loglevel
+                            self.log_level = 'DEBUG'
+                            self.logfile = None
 
                         unc_file = None
 
