@@ -364,7 +364,6 @@ def compute_flux(args):
     
     cmfsrc = rio.open(cmfimgf,'r')
     cmfcrs = cmfsrc.crs
-    print(cmfsrc.res)
 
     # make sure we're UTM projected
     cmflng,cmflat = cmfsrc.lnglat()
