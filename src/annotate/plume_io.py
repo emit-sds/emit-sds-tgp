@@ -249,6 +249,8 @@ def rawspace_coordinate_conversion(glt, coordinates, trans, ortho=False):
 
 def trim_plume(plume_mask_in, trans, badmask=None, nodata_value=0, buffer=0):
 
+    success = True
+    
     plume_mask = plume_mask_in
     if badmask is not None:
         plume_mask = plume_mask_in.copy()
@@ -258,7 +260,8 @@ def trim_plume(plume_mask_in, trans, badmask=None, nodata_value=0, buffer=0):
     x_locs = np.where(np.sum(plume_mask != nodata_value, axis=0))[0]
 
     if len(y_locs) == 0 or len(x_locs) == 0:
-        raise ValueError('No valid plume pixels found in mask to trim')
+        success = False
+        #raise ValueError('No valid plume pixels found in mask to trim')
     
     min_y = max(y_locs[0] - buffer, 0)
     max_y = min(y_locs[-1] + buffer, plume_mask.shape[0] - 1)
@@ -269,5 +272,5 @@ def trim_plume(plume_mask_in, trans, badmask=None, nodata_value=0, buffer=0):
     outtrans = list(deepcopy(trans))
     outtrans[0] += min_x * trans[1]
     outtrans[3] += min_y * trans[5]
-    return trimmed_mask, outtrans
+    return trimmed_mask, outtrans, success
 

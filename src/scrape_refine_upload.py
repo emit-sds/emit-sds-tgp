@@ -16,6 +16,20 @@
 #
 # Authors: Philip G. Brodrick, philip.brodrick@jpl.nasa.gov
 
+'''
+Major Steps, at each iteration of the loop:
+
+1. Download the latest plume annotations, and intersect them with coverage to add FIDS, Orbits, etc.  ID new plumes during this
+2. Find all DCIDs that have new plumes, and mosaic each 
+3. Step through each plume in the DCID, cut it out, calculate stats and metadata
+4. Prep each plume for delivery, writing output files
+5. Merge all plumes into single output metadata, merge all plumes within a DCID to a single COG / tiled dataset
+
+Note that previously, the necessity of the background calculation required an extra iteration through each DCID in 3, which was costly.
+Removing the need for the background calcluation eliminates this step, and it has been cut out of the code for speed.
+'''
+
+
 import argparse
 import os
 import numpy as np
@@ -42,6 +56,7 @@ def get_sds_cog(fid, enh_version, dtype='ch4', data_value=''):
 
 def plume_delivery_basename(outdir, feat):
     return os.path.join(outdir, feat['properties']['Scene FIDs'][0][4:12], feat['properties']['Scene FIDs'][0] + '_' + feat['properties']['Plume ID'])
+
 def plume_working_basename(outdir, feat):
     return os.path.join(outdir, feat['properties']['Plume ID'])
     
@@ -68,7 +83,6 @@ def main(input_args=None):
                         filename=args.logfile, datefmt='%Y-%m-%d,%H:%M:%S')
 
     np.random.seed(13)
-
     max_runs = 1
     if args.continuous:
         max_runs = int(1e15)
@@ -78,19 +92,6 @@ def main(input_args=None):
     except:
         raise AttributeError('Could not open databse - check args.database_config')
 
-    '''
-    Major Steps, at each iteration of the loop:
-
-    1. Download the latest plume annotations, and intersect them with coverage to add FIDS, Orbits, etc.  ID new plumes during this
-    2. Find all DCIDs that have new plumes, and mosaic each 
-    3. Step through each plume in the DCID, cut it out, calculate stats and metadata
-    4. Prep each plume for delivery, writing output files
-    5. Merge all plumes into single output metadata, merge all plumes within a DCID to a single COG / tiled dataset
-
-    Note that previously, the necessity of the background calculation required an extra iteration through each DCID in 3, which was costly.
-    Removing the need for the background calcluation eliminates this step, and it has been cut out of the code for speed.
-    '''
-
     # Global File names
     annotation_file_raw = os.path.join(args.out_dir, "manual_annotation_raw.json") # Straight from MMGIS
     annotation_file = os.path.join(args.out_dir, "manual_annotation.json") # MMGIS + FIDs + Orbits 
@@ -99,12 +100,13 @@ def main(input_args=None):
     delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
     quant_dir = os.path.join(args.out_dir, 'quantification') # Quantification working directory
     proc_dir = os.path.join(args.out_dir, 'processing') # Processing working directory
-    working_flux_csv = os.path.join(args.out_dir, 'working_flux_estimates.csv') # Quantification working file
     working_windspeed_csv = os.path.join(args.out_dir, 'working_windspeed_estimates_0000.csv') # Quantification windspeed working file
     os.makedirs(delivery_dir, exist_ok=True)
     os.makedirs(quant_dir, exist_ok=True)
     os.makedirs(proc_dir, exist_ok=True)
 
+
+    # Loop only serves to rerun same instances over and over
     for run in range(max_runs):
         logging.debug('Loading Data')
         ######## Step 1 ###########
@@ -261,16 +263,15 @@ def main(input_args=None):
                 else:
                     combined_mask = np.logical_or(combined_mask, loc_fid_mask)
 
-                cut_plume_mask, newp_trans = plume_io.trim_plume(loc_fid_mask, trans, buffer=args.plume_buffer_px)
-                #tocut = ortdat.copy()
-                #tocut[loc_fid_mask == 0] = -9999
-                cut_plume_data, _ = plume_io.trim_plume(ortdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
+                cut_plume_mask, newp_trans, s = plume_io.trim_plume(loc_fid_mask, trans, buffer=args.plume_buffer_px)
+                cut_plume_data, _, s = plume_io.trim_plume(ortdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
+                if s is False:
+                    logging.warning(f'Plume {feat["properties"]["Plume ID"]} has no valid pixels after trimming, skipping plume')
+                    continue
 
                 if estimate_simple_ime:
-                    #uncdat[loc_fid_mask == 0] = -9999
-                    #snsdat[loc_fid_mask == 0] = -9999
-                    cut_uncdat, _ = plume_io.trim_plume(uncdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
-                    cut_snsdat, _ = plume_io.trim_plume(snsdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
+                    cut_uncdat, _, s = plume_io.trim_plume(uncdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
+                    cut_snsdat, _, s = plume_io.trim_plume(snsdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
 
 
 
