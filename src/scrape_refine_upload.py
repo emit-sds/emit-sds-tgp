@@ -98,10 +98,12 @@ def main(input_args=None):
     output_json = os.path.join(args.out_dir, 'combined_plume_metadata.json') # Output (public facing) metadata file
     delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
     quant_dir = os.path.join(args.out_dir, 'quantification') # Quantification working directory
+    proc_dir = os.path.join(args.out_dir, 'processing') # Processing working directory
     working_flux_csv = os.path.join(args.out_dir, 'working_flux_estimates.csv') # Quantification working file
     working_windspeed_csv = os.path.join(args.out_dir, 'working_windspeed_estimates_0000.csv') # Quantification windspeed working file
     os.makedirs(delivery_dir, exist_ok=True)
     os.makedirs(quant_dir, exist_ok=True)
+    os.makedirs(proc_dir, exist_ok=True)
 
     for run in range(max_runs):
         logging.debug('Loading Data')
@@ -191,13 +193,13 @@ def main(input_args=None):
             ort_sens_files = [get_sds_cog(fid, args.enh_data_version, dtype=args.type, data_value='sens') for fid in fids_in_dcid]
             unc_dat_files = [get_sds_cog(fid, args.enh_data_version, dtype=args.type, data_value='uncert') for fid in fids_in_dcid]
 
-            dcid_ort_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.vrt')
-            dcid_ort_unc_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_unc_ort.vrt')
-            dcid_ort_sns_vrt_file = os.path.join(args.out_dir, f'dcid_{dcid}_sns_ort.vrt')
+            dcid_ort_vrt_file = os.path.join(proc_dir, f'dcid_{dcid}_mf_ort.vrt')
+            dcid_ort_unc_vrt_file = os.path.join(proc_dir, f'dcid_{dcid}_unc_ort.vrt')
+            dcid_ort_sns_vrt_file = os.path.join(proc_dir, f'dcid_{dcid}_sns_ort.vrt')
 
-            dcid_ort_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_mf_ort.tif')
-            dcid_ort_unc_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_unc_ort.tif')
-            dcid_ort_sns_tif_file = os.path.join(args.out_dir, f'dcid_{dcid}_sns_ort.tif')
+            dcid_ort_tif_file = os.path.join(proc_dir, f'dcid_{dcid}_mf_ort.tif')
+            dcid_ort_unc_tif_file = os.path.join(proc_dir, f'dcid_{dcid}_unc_ort.tif')
+            dcid_ort_sns_tif_file = os.path.join(proc_dir, f'dcid_{dcid}_sns_ort.tif')
             utils.print_and_call(f'gdalbuildvrt {dcid_ort_vrt_file} {" ".join(ort_dat_files)} --quiet')
             if args.write_dcid_tifs:
                 utils.print_and_call(f'gdal_translate {dcid_ort_vrt_file} {dcid_ort_tif_file} -co COMPRESS=LZW --quiet')
@@ -273,7 +275,7 @@ def main(input_args=None):
 
 
                 ############  Step 4 ###########
-                outbase = plume_working_basename(args.out_dir, feat)
+                outbase = plume_working_basename(proc_dir, feat)
                 outmask_finepoly_file = os.path.join(outbase + '_finepolygon.json')
                 outmask_poly_file = os.path.join(outbase + '_polygon.json')
                 outmask_ort_file = os.path.join(outbase + '_mask_ort.tif')
@@ -378,16 +380,19 @@ def main(input_args=None):
 
                     lfa = flux_args()
                     if lfa.lat is None or lfa.lng is None:
-                        logging.debug(f'Plume {lfa.fid} missing Psuedo-Origin, skipping flux calc')
+                        logging.debug(f'Plume {lfa.fid} missing Psuedo-Origin, skipping plume')
                         continue
 
-                    with open(os.path.join(args.out_dir, f'flux_args_{poly_plume["properties"]["Plume ID"]}.json'),'wb') as pf:
+                    with open(os.path.join(proc_dir, f'flux_args_{poly_plume["properties"]["Plume ID"]}.json'),'wb') as pf:
                         pf.write(json.dumps(lfa.__dict__, indent=2).encode('utf-8'))
 
 
                     # Compute Flux
                     #quant_res: [plume_complex, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps, C2_UNC_MASK]
                     flux_status, flux_res = compute_flux.compute_flux(lfa)
+                    if flux_status != 'success':
+                        logging.warning(f'Flux calculation failed for plume {lfa.fid} with status {flux_status}, skipping plume')
+                        continue
                     logging.debug(f'Flux results: {flux_status} {flux_res}')
 
                     # Compute Windspeed

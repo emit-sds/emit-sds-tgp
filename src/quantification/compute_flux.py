@@ -44,6 +44,7 @@ from os.path import splitext
 import csv
 import numpy as np
 import pylab as pl
+from osgeo import gdal
 from osgeo.gdal import osr
 import logging
 
@@ -58,6 +59,7 @@ import matplotlib.patches as patches
 
 import rasterio as rio
 import pandas as pd
+from annotate import plume_io
 
 #              ppm(m)   L/m^3     mole/L    kg/mole
 PPMM2KGCH4 = (1.0/1e6)*(1000.0)*(1.0/22.4)*(0.016042) # 7.161607142857143e-07
@@ -362,6 +364,7 @@ def compute_flux(args):
     
     cmfsrc = rio.open(cmfimgf,'r')
     cmfcrs = cmfsrc.crs
+    print(cmfsrc.res)
 
     # make sure we're UTM projected
     cmflng,cmflat = cmfsrc.lnglat()
@@ -372,30 +375,40 @@ def compute_flux(args):
     logging.debug(f'utm zone,hemi: {zone,hemi}')
     
     # if not: use warpedvrt
-    resampling = rio.enums.Resampling.bilinear
     if not any([str(cmf_epsg).startswith(prefix) for prefix in ['326','327']]):
         # replace the OGC:CRS84 (lng,lat) projection with conventional WGS-84 (lat,lng) CRS
-        # logging.debug(f'Converting {str(cmfcrs)} (lng,lat) to EPSG:{epsg_utm} (lat,lng) CRS')
-        resampling = rio.enums.Resampling.bilinear
-        cmfsrc = rio.vrt.WarpedVRT(cmfsrc, crs=utm_epsg, resampling=resampling)
-        cmfcrs = cmfsrc.crs
+        logging.debug(f'Converting {str(cmfcrs)} (lng,lat) to EPSG:{utm_epsg} (lat,lng) CRS')
+        cmfsrc = gdal.Warp('', cmfimgf, dstSRS=f'EPSG:{utm_epsg}', format='VRT', resampleAlg='bilinear')
+        cmfcrs = cmfsrc.GetSpatialRef()
+    else:
+        cmfsrc = gdal.Open(cmfimgf)
 
-    utm_epsg = cmfcrs.to_epsg()
-    cmfimg = cmfsrc.read(cmfsrc.count).squeeze()
-    cmfmsk = (cmfsrc.read_masks(cmfsrc.count).squeeze()!=0) & np.isfinite(cmfimg)
+    # Get EPSG code from the spatial reference
+    if hasattr(cmfcrs, 'GetAuthorityCode'):
+        utm_epsg = int(cmfcrs.GetAuthorityCode(None))
+    else:
+        utm_epsg = int(utmzone2epsg(zone, hemi))
+
+    cmfimg = cmfsrc.ReadAsArray().squeeze()
+    cmfmsk = np.logical_and(cmfimg != cmfsrc.GetRasterBand(1).GetNoDataValue() , np.isfinite(cmfimg))
     cmfimg_sens = cmfimg
     if args.sns_file != 'None':
-        senssrc = rio.open(args.sns_file,'r')
-        senssrc = rio.vrt.WarpedVRT(senssrc, crs=utm_epsg, resampling=resampling)
-        sens = senssrc.read(cmfsrc.count).squeeze()
-        #sens = gdal.Open(args.sns_file).ReadAsArray()
+        senssrc = None
+        if not any([str(cmf_epsg).startswith(prefix) for prefix in ['326','327']]):
+            senssrc = gdal.Warp('', args.sns_file, dstSRS=f'EPSG:{utm_epsg}', format='VRT', resampleAlg='bilinear')
+        else:
+            senssrc = gdal.Open(args.sns_file)
+        sens = senssrc.ReadAsArray().squeeze()
         cmfimg_sens = cmfimg / sens
         cmfimg_sens[sens == 0] = 0.
     
     if args.unc_file != 'None':
-        uncsrc = rio.open(args.unc_file,'r')
-        uncsrc = rio.vrt.WarpedVRT(uncsrc, crs=utm_epsg, resampling=resampling)
-        unc = uncsrc.read(cmfsrc.count).squeeze()
+        uncsrc = None
+        if not any([str(cmf_epsg).startswith(prefix) for prefix in ['326','327']]):
+            uncsrc = gdal.Warp('', args.unc_file, dstSRS=f'EPSG:{utm_epsg}', format='VRT', resampleAlg='bilinear')
+        else:
+            uncsrc = gdal.Open(args.unc_file)
+        unc = uncsrc.ReadAsArray().squeeze()
     else:
         unc = np.zeros_like(cmfimg)
 
@@ -412,7 +425,7 @@ def compute_flux(args):
     maxppmm = args.maxppmm or cmfmax
 
     rgbsrc = cmfsrc
-    if cmfsrc.count==1 and not rgbimgf:
+    if cmfsrc.RasterCount ==1 and not rgbimgf:
         rgbimg = np.zeros([cmfimg.shape[0],cmfimg.shape[1],3],dtype=np.uint8)
     else:
         if rgbimgf:
@@ -428,7 +441,13 @@ def compute_flux(args):
     cmfcrs.ImportFromEPSG(utm_epsg)
     geo2cmf = osr.CoordinateTransformation(geocrs, cmfcrs)
     utmx,utmy,_ = geo2cmf.TransformPoint(lat,lng)
-    i,j = cmfsrc.index(utmx,utmy)
+    def index(ds,x,y):
+        gt = ds.GetGeoTransform()
+        px = int((x - gt[0]) / gt[1])
+        py = int((y - gt[3]) / gt[5])
+        return py,px
+
+    i,j = index(cmfsrc,utmx,utmy)
     del geocrs, cmfcrs
     logging.debug(f'(lng,lat): {lng,lat}\n(utmx,utmy): {utmx,utmy}\n(i,j): {i,j}')
 
@@ -439,7 +458,8 @@ def compute_flux(args):
         manual_boundary_coordinates_ij = []
         for lon_lat in bnd_list:
             utmx,utmy,_ = geo2cmf.TransformPoint(lon_lat[1],lon_lat[0])
-            manual_boundary_coordinates_ij.append(cmfsrc.index(utmx,utmy))
+            manual_boundary_coordinates_ij.append(index(cmfsrc,utmx,utmy))
+            #manual_boundary_coordinates_ij.append(cmfsrc.index(utmx,utmy))
         p = Path(np.array(manual_boundary_coordinates_ij))
 
         #Set up the test points
@@ -450,7 +470,9 @@ def compute_flux(args):
         #Test which points are inside the polygon
         manual_boundary_mask = p.contains_points(points).reshape(cmfimg.shape)
     
-    ps = abs(cmfsrc.res[0])
+    #ps = abs(cmfsrc.res[0])
+    trans = cmfsrc.GetGeoTransform()
+    ps = (abs(trans[1]) + abs(trans[5])) / 2.0
     logging.debug(f'ps: {ps:.3f} (m^2)')
 
     mergedistpx = int(np.ceil(mergedistm/ps))
@@ -526,12 +548,9 @@ def compute_flux(args):
     
     logging.debug(f'plumemask area: {plumemask.sum()}')
 
-    meta = cmfsrc.meta
-    meta.update({'driver':'GTiff', 'compress':'lzw', 'predictor':1,
-                 'dtype':rio.uint8, 'nodata':0, 'count':1})
-
-    with rio.open(imemskf, 'w', **meta) as dst:
-        dst.write(np.uint8(255*plumemask)[np.newaxis].astype(meta['dtype']))
+    plume_io.write_cog(imemskf, np.uint8(255*plumemask).reshape(plumemask.shape[0], plumemask.shape[1], 1), 
+                       cmfsrc.GetGeoTransform(), cmfsrc.GetProjection(), 
+                       nodata_value = 0)
         
     logging.debug(f'saved: {imemskf}')
 
@@ -976,9 +995,9 @@ def compute_flux(args):
         areas = np.float32(areas)
         sums = np.float32(sums)
         psums = np.float32(psums)
-        imes = ppmm2kg(sums,cmfsrc.res[0])
+        imes = ppmm2kg(sums,ps)
 
-        fluxs = np.float32([ime2flux(ime,d*cmfsrc.res[0],wind_ms=windms) for ime,d in zip(imes,dists)])
+        fluxs = np.float32([ime2flux(ime,d*ps,wind_ms=windms) for ime,d in zip(imes,dists)])
         fluxdiffs = np.float32([0]+list(np.diff(fluxs)))
 
         meandiffs = np.float32([0]+list(np.diff(means)))

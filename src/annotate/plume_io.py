@@ -225,7 +225,7 @@ def get_metadata(plume_dict, global_metadata):
             #'Estimated_Uncertainty_ppmm': plume_dict['properties']['Concentration Uncertainty (ppm m)'],
             'UTC_Time_Observed': plume_dict['properties']['UTC Time Observed'],
             #Source_Scenes - match full conventions 
-            'Source_Scenes': ','.join(scene_names),
+            'Source_Scenes': scene_names,
             'Latitude of max concentration': plume_dict['properties']['Latitude of max concentration'],
             'Longitude of max concentration': plume_dict['properties']['Longitude of max concentration'],
             'Max Plume Concentration (ppm m)': plume_dict['properties']['Max Plume Concentration (ppm m)'],
