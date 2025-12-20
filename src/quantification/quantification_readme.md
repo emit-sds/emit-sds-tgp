@@ -10,13 +10,13 @@ compute_flux.py requires both the concentration length estimates and correspondi
 compute_flux.py computes the IME and plume fetch. An example of how to call compute_flux.py is found in simpleIME.py:
 
 ```
-python simpleIME.py --data_folder /store/emit/ops/data/acquisitions/ --output_path OUTPUT_PATH --instrument emit --plume_json_filename /store/brodrick/methane/ch4_plumedir/previous_manual_annotation_oneback.json
+python src/quantification/simpleIME.py --data_folder /store/emit/ops/data/acquisitions/ --output_path OUTPUT_PATH --instrument emit --plume_json_filename /store/brodrick/methane/ch4_plumedir/previous_manual_annotation_oneback.json
 ```
 You can also specify a subset of plumes to run using --plume_id id1 id2 ...
 For example: 
 
 ```
-python simpleIME.py --data_folder /store/emit/ops/data/acquisitions/ --output_path OUTPUT_PATH --instrument emit --plume_json_filename /store/brodrick/methane/ch4_plumedir/previous_manual_annotation_oneback.json --plume_id CH4_PlumeComplex-10 CH4_PlumeComplex-11
+python src/quantification/simpleIME.py --data_folder /store/emit/ops/data/acquisitions/ --output_path OUTPUT_PATH --instrument emit --plume_json_filename /store/brodrick/methane/ch4_plumedir/previous_manual_annotation_oneback.json --plume_id CH4_PlumeComplex-10 CH4_PlumeComplex-11
 ```
 
 ## Windspeed
@@ -24,7 +24,7 @@ python simpleIME.py --data_folder /store/emit/ops/data/acquisitions/ --output_pa
 Windspeed estimates are collected from HRRR and ERA-5 reanalysis data using HRRR_and_ERA5_windspeeds.py. An example call is:
 
 ```
-python HRRR_and_ERA5_windspeeds.py /store/jfahlen/EMIT_met_data/EMIT_wind_data_HRRR_ERA5_fromCDS_0000.csv --write-rate 1 --plume-file /store/brodrick/methane/ch4_plumedir/previous_manual_annotation_oneback.json
+python src/quantification/windspeeds.py /store/jfahlen/EMIT_met_data/EMIT_wind_data_HRRR_ERA5_fromCDS_0000.csv --write-rate 1 --plume-file /store/brodrick/methane/ch4_plumedir/previous_manual_annotation_oneback.json
 ```
 
 Note that the first parameter is an input file. The output of the code will have the same name but with the number incremented. If the file does not exist, then it will be created. If it does exist, then new outputs will be appended. For the example above, if the file in the first parameter does not exist, then the code will store the windspeeds for all the plumes in --plume-file in EMIT_wind_data_HRRR_ERA5_fromCDS_0001.csv (note the increment). If it did exist, say from a previous run of the program, then EMIT_wind_data_HRRR_ERA5_fromCDS_0001.csv will contain all the plumes in the original plus the windspeeds from the additional plumes listed in --plume-file.

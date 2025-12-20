@@ -131,7 +131,7 @@ def write_color_quicklook(indat, output_file):
     del dst_ds, outDataset
  
 
-def write_json(output_file, plume_dict, scene_names):
+def write_json(output_file, plume_dict, scene_names, indent=4):
     outdict = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84" }, "type": "name"},"features":[],"name":"methane_metadata","type":"FeatureCollection" }
     outdict['features'].append(deepcopy(plume_dict))
 
@@ -140,7 +140,7 @@ def write_json(output_file, plume_dict, scene_names):
     del outdict['features'][0]['properties']['Data Download']
 
     with open(output_file, 'w') as fout:
-        fout.write(json.dumps(outdict, cls=SerialEncoder)) 
+        fout.write(json.dumps(outdict, indent=indent, cls=SerialEncoder)) 
 
 
 def write_geojson_linebyline(output_file, outdict):

@@ -14,7 +14,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-# Authors: Jay Fahlen, philip.brodrick@jpl.nasa.gov
+# Authors: Jay Fahlen
+#          Brian Bue
+#          Philip G. Brodrick, philip.brodrick@jpl.nasa.gov
 
 import json
 import pandas as pd

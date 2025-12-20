@@ -123,7 +123,7 @@ def ppmm2kg(pixels_ppmm,ps,verbose=False):
     #assert (np.isfinite(pixels_ppmm) & (pixels_ppmm>=0)).all()
     scalef = PPMM2KGCH4 * (ps*ps)
     if verbose:
-        print(f'ppmm->kg scalef @ {ps:-5.2f}m: {scalef}')
+        logging.debug(f'ppmm->kg scalef @ {ps:-5.2f}m: {scalef}')
     
     return pixels_ppmm * scalef
 
@@ -216,7 +216,7 @@ def mergelabels(labimg,mergedist,return_merged=False,doplot=False):
         if return_merged:
             mergemap[mlab] = np.unique(labimg[mobj][mlmask])
             nbefore += len(mergemap[mlab]) 
-            print(f'{nbefore} input labels -> {len(mergelab)} merged labels @ mergedist {mergedist}px')
+            logging.debug(f'{nbefore} input labels -> {len(mergelab)} merged labels @ mergedist {mergedist}px')
     if doplot:
         import pylab as pl
         fig,ax = pl.subplots(1,2,sharex=True,sharey=True)
@@ -262,10 +262,10 @@ def extract_tile(img,ul,tdim,verbose=False,transpose=None,fill_value=0):
     padb,padr = padt+(iend-ibeg), padl+(jend-jbeg)
     
     if verbose:
-        print(f'img.nrows,img.ncols, {nr}, {nc}')
-        print(f'ul,lr,tdim, {ul}, {lr}, {tdim}')
-        print(f'padt,padb,padl,padr, {padt}, {padb}, {padl}, {padr}')
-        print(f'ibeg,iend,jbeg,jend, {ibeg}, {iend}, {jbeg}, {jend}')
+        logging.debug(f'img.nrows,img.ncols, {nr}, {nc}')
+        logging.debug(f'ul,lr,tdim, {ul}, {lr}, {tdim}')
+        logging.debug(f'padt,padb,padl,padr, {padt}, {padb}, {padl}, {padr}')
+        logging.debug(f'ibeg,iend,jbeg,jend, {ibeg}, {iend}, {jbeg}, {jend}')
 
     imgtile = fill_value*np.ones([tdim[0],tdim[1],nb],dtype=img.dtype)
     imgtile[padt:padb,padl:padr] = np.atleast_3d(img[ibeg:iend,jbeg:jend])
@@ -322,13 +322,13 @@ def compute_flux(args):
             return f'error: detrois.max() fails in plume_rois()'
 
         if detrois.max()==0:
-            print(f'no CMF pixels > minppmm={minppmm}')
+            logging.debug(f'no CMF pixels > minppmm={minppmm}')
             return detrois
         
         if minareapx>1:
             detrois = remove_small_objects(detrois,minareapx,connectivity=2)
             if detrois.max()==0:
-                print(f'no ROIs with area > minareapx={minareapx}')
+                logging.debug(f'no ROIs with area > minareapx={minareapx}')
                 return detrois
             detrois = imlabel(detrois!=0,connectivity=2)
     
@@ -354,7 +354,7 @@ def compute_flux(args):
             # no plume ROIs found
             plumemask[plumeij[0],plumeij[1]] = 0
             error_msg = f'Warning: no detection ROIs within {mergedistpx}px of plume location {plumeij}'
-            print(error_msg)
+            logging.debug(error_msg)
             return error_msg, [], [], []
 
         fetchmask = plumedist<=fetchpx
@@ -369,13 +369,13 @@ def compute_flux(args):
     cmf_epsg = cmfcrs.to_epsg()
     utm_epsg = int(utmzone2epsg(zone,hemi))
 
-    print(f'utm zone,hemi: {zone,hemi}')
+    logging.debug(f'utm zone,hemi: {zone,hemi}')
     
     # if not: use warpedvrt
     resampling = rio.enums.Resampling.bilinear
     if not any([str(cmf_epsg).startswith(prefix) for prefix in ['326','327']]):
         # replace the OGC:CRS84 (lng,lat) projection with conventional WGS-84 (lat,lng) CRS
-        # print(f'Converting {str(cmfcrs)} (lng,lat) to EPSG:{epsg_utm} (lat,lng) CRS')
+        # logging.debug(f'Converting {str(cmfcrs)} (lng,lat) to EPSG:{epsg_utm} (lat,lng) CRS')
         resampling = rio.enums.Resampling.bilinear
         cmfsrc = rio.vrt.WarpedVRT(cmfsrc, crs=utm_epsg, resampling=resampling)
         cmfcrs = cmfsrc.crs
@@ -405,8 +405,8 @@ def compute_flux(args):
     cmfmad = mad(cmfpix,medval=cmfmed)
     cmfmax = cmfpix.max()
 
-    print(f'cmf (med,mad): {cmfmed,cmfmad}')
-    print(f'cmf (min,max): {cmfmin,cmfmax}')
+    logging.debug(f'cmf (med,mad): {cmfmed,cmfmad}')
+    logging.debug(f'cmf (min,max): {cmfmin,cmfmax}')
     
     minppmm = args.minppmm or cmfmin
     maxppmm = args.maxppmm or cmfmax
@@ -430,7 +430,7 @@ def compute_flux(args):
     utmx,utmy,_ = geo2cmf.TransformPoint(lat,lng)
     i,j = cmfsrc.index(utmx,utmy)
     del geocrs, cmfcrs
-    print(f'(lng,lat): {lng,lat}\n(utmx,utmy): {utmx,utmy}\n(i,j): {i,j}')
+    logging.debug(f'(lng,lat): {lng,lat}\n(utmx,utmy): {utmx,utmy}\n(i,j): {i,j}')
 
     manual_boundary_mask = np.ones_like(cmfimg).astype(bool)
     if len(args.manual_boundary_coordinates_lon_lat) > 0:
@@ -451,7 +451,7 @@ def compute_flux(args):
         manual_boundary_mask = p.contains_points(points).reshape(cmfimg.shape)
     
     ps = abs(cmfsrc.res[0])
-    print(f'ps: {ps:.3f} (m^2)')
+    logging.debug(f'ps: {ps:.3f} (m^2)')
 
     mergedistpx = int(np.ceil(mergedistm/ps))
     maxfetchpx = int(np.ceil(maxfetchm/ps))    
@@ -465,14 +465,14 @@ def compute_flux(args):
         cmfoff[cmfoff!=cmfoff] = -9999
         oi,oj = np.where(cmfoff == cmfoff.max())
         ni,nj = i+(oi[0]-ioff),j+(oj[0]-ioff)
-        print(f'maxenhance nearest {i,j} (+/- {ioff}px) -> {ni,nj}')
+        logging.debug(f'maxenhance nearest {i,j} (+/- {ioff}px) -> {ni,nj}')
         i,j = ni,nj    
 
-    print(f'maxfetchm: {maxfetchm} -> maxfetchpx: {maxfetchpx}')
-    print(f'mergedistm: {mergedistm} -> mergedistpx: {mergedistpx}')
-    print(f'minaream2: {minaream2} -> minareapx: {minareapx}')
+    logging.debug(f'maxfetchm: {maxfetchm} -> maxfetchpx: {maxfetchpx}')
+    logging.debug(f'mergedistm: {mergedistm} -> mergedistpx: {mergedistpx}')
+    logging.debug(f'minaream2: {minaream2} -> minareapx: {minareapx}')
     if minareapx <= 1:
-        print(f'minarea<=1px with minarea={minaream2}m^2 at image ps={ps}m^2: no area filtering performed ')
+        logging.debug(f'minarea<=1px with minarea={minaream2}m^2 at image ps={ps}m^2: no area filtering performed ')
 
     # note: hack
     # do not use connected components > maxfetchpx px from (i,j)
@@ -483,10 +483,10 @@ def compute_flux(args):
         labmsk = rio.open(labimgf).read(1).squeeze()!=0
         poslab = imlabel(labmsk,connectivity=2)
     
-    print(f'imin,imax: {imin,imax}, jmin,jmax: {jmin,jmax}')
+    logging.debug(f'imin,imax: {imin,imax}, jmin,jmax: {jmin,jmax}')
 
     if mask_mode=='infer':
-        print("infer new mask")
+        logging.debug("infer new mask")
         detrois = np.zeros_like(cmfimg,dtype=np.int32)
         circle_x, circle_y = np.ogrid[:cmfimg.shape[0], :cmfimg.shape[1]]
         circle_mask = (circle_x - i)**2 + (circle_y - j)**2 < maxfetchpx**2
@@ -498,7 +498,7 @@ def compute_flux(args):
             return ret, None
         detrois[imin:imax,jmin:jmax] = ret
 
-        print(f'{len(np.unique(detrois))-1} rois detected')
+        logging.debug(f'{len(np.unique(detrois))-1} rois detected')
 
         try:
             plumemask, detidmask, fetchmask, fetchpx = fetch_masks(detrois,(i,j),
@@ -512,10 +512,10 @@ def compute_flux(args):
             return plumemask, None
         
         fetchm = fetchpx*ps
-        print(f'estimated fetch: {fetchm} (m)')
+        logging.debug(f'estimated fetch: {fetchm} (m)')
         
     elif mask_mode=='label':
-        print("using pre-existing mask")
+        logging.debug("using pre-existing mask")
         plumemask = labmsk
         fetchm = maxfetchm
         fetchpx = maxfetchpx
@@ -524,7 +524,7 @@ def compute_flux(args):
         fetchmask = plumedist<=fetchpx
         detidmask = plumedist<=mergedistpx
     
-    print(f'plumemask area: {plumemask.sum()}')
+    logging.debug(f'plumemask area: {plumemask.sum()}')
 
     meta = cmfsrc.meta
     meta.update({'driver':'GTiff', 'compress':'lzw', 'predictor':1,
@@ -533,7 +533,7 @@ def compute_flux(args):
     with rio.open(imemskf, 'w', **meta) as dst:
         dst.write(np.uint8(255*plumemask)[np.newaxis].astype(meta['dtype']))
         
-    print(f'saved: {imemskf}')
+    logging.debug(f'saved: {imemskf}')
 
     plumepix = cmfimg[(plumemask!=0) & cmfmsk]
     plumesens_pix = cmfimg_sens[(plumemask!=0) & cmfmsk] # If not running with sensitivity then cmfimg_sens = cmfimg
@@ -545,9 +545,9 @@ def compute_flux(args):
             make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_ij, imin, imax, jmin, jmax, imefigf, imefigf_zoom, ps)
     
     if len(plumepix)==0:
-        print(f'no plume pixels > {minppmm}ppmm with area > {minaream2}, exiting')
+        logging.debug(f'no plume pixels > {minppmm}ppmm with area > {minaream2}, exiting')
         plumeime = plumeflux = fetchm = plumearea = plumemean = plumevar = np.nan
-        print('BBB exiting')
+        logging.debug('BBB exiting')
         sys.exit(1)
         
 ################################ 
@@ -610,7 +610,7 @@ def compute_flux(args):
 
         labradpx = ccrad
         if verbose:
-            print(f'{poslab.shape} labradpx: {labradpx}px')
+            logging.debug(f'{poslab.shape} labradpx: {labradpx}px')
         
         rmin,rmax = imin,imax+1
         cmin,cmax = jmin,jmax+1
@@ -618,7 +618,7 @@ def compute_flux(args):
             
             
         if verbose:
-            print(f'{posrad.shape} labuse in {rmin,rmax,cmin,cmax}: ')
+            logging.debug(f'{posrad.shape} labuse in {rmin,rmax,cmin,cmax}: ')
         labuse = np.unique(posrad*disk(labradpx))
         if labuse.any():
             labmsk = np.isin(poslab,labuse[labuse!=0])            
@@ -656,9 +656,9 @@ def compute_flux(args):
         labi,labj = np.where(labmsk)
         
         # hullij = chull(np.c_[labi,labj])
-        #print(f'i,j: {i,j}')
+        #logging.debug(f'i,j: {i,j}')
         #i,j = hullij[np.argmin(np.abs(np.c_[i,j]-hullij).sum(axis=1))]
-        #print(f'hull i,j: {i,j}')
+        #logging.debug(f'hull i,j: {i,j}')
     else:
         #poslab = imlabel(cmfimg>minppmm)
         labmsk = np.zeros_like(cmfimg,dtype=np.bool_)
@@ -705,7 +705,7 @@ def compute_flux(args):
 
         nppix = pmsk.sum()
         if verbose:
-            print(f'd: {d}: {ncmsk} {nppix}')#, raw_input()
+            logging.debug(f'd: {d}: {ncmsk} {nppix}')#, raw_input()
         if ncmsk==0 or nppix==0:
             # no pixels in current ccirc or no positive pixels in exterior 
             break
@@ -735,11 +735,11 @@ def compute_flux(args):
         
         
         if verbose:
-            print(f'd: {d} area: {darea} adiff: {darea-oarea}')
-            print(f'mean: {dmean} sum: {dsum} sdiff: {dsum-osum}')
-            print(f'ime*: {dime:.4f} flux*: {dflx:.4f}')
-            print(f'ime+: {posime:.4f} flux+: {posflx:.4f}')        
-            print(f'ime>: {thrime:.4f} flux>: {thrflx:.4f}')        
+            logging.debug(f'd: {d} area: {darea} adiff: {darea-oarea}')
+            logging.debug(f'mean: {dmean} sum: {dsum} sdiff: {dsum-osum}')
+            logging.debug(f'ime*: {dime:.4f} flux*: {dflx:.4f}')
+            logging.debug(f'ime+: {posime:.4f} flux+: {posflx:.4f}')        
+            logging.debug(f'ime>: {thrime:.4f} flux>: {thrflx:.4f}')        
 
         ccpix = cmfimg[cmsk]
         ccmean = ccpix.mean()
@@ -818,21 +818,21 @@ def compute_flux(args):
     #else: 
     #    with open(csv_file_path, 'a', newline='') as file: 
     #        writer = csv.writer(file)
-    #        print('Writing row')
+    #        logging.debug('Writing row')
     #        writer.writerow([fid, status, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps])
     # ## 
 
     returns = [fid, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps, C2_UNC_MASK]
     
-    print([fid, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps, C2_UNC_MASK])
+    logging.debug([fid, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps, C2_UNC_MASK])
 #     ccflux = ime2flux(ccime,fetchm,windms)    
 #     ccarea = ps*ps*ccareas.sum()
     
-#     print(f'ime(ccirc*):  {ccime} (kg)')
-#     print(f'flux(ccirc*): {ccflux} (kg/hr)')    
-#     print(f'mean(ccirc*): {ccmean} (ppmm)')
-#     print(f'var(ccirc*):  {ccvar} (ppmm)')
-#     print(f'area(ccirc*): {ccarea} (m^2)')
+#     logging.debug(f'ime(ccirc*):  {ccime} (kg)')
+#     logging.debug(f'flux(ccirc*): {ccflux} (kg/hr)')    
+#     logging.debug(f'mean(ccirc*): {ccmean} (ppmm)')
+#     logging.debug(f'var(ccirc*):  {ccvar} (ppmm)')
+#     logging.debug(f'area(ccirc*): {ccarea} (m^2)')
 
 #     plumeime = ime(plumepix,ps)
 #     plumefluxf = ime2flux(plumeime,fetchm,windms)
@@ -840,11 +840,11 @@ def compute_flux(args):
 #     plumevar = plumepix.var()
 #     plumearea = ps*ps*plumemask.sum()
     
-#     print(f'ime(mask):  {plumeime} (kg)')
-#     print(f'flux(mask): {plumeflux} (kg/hr)')
-#     print(f'area(mask): {plumearea} (m^2)')
-#     print(f'mean(mask): {plumemean} (ppmm)')
-#     print(f'var(mask):  {plumevar} (ppmm)')
+#     logging.debug(f'ime(mask):  {plumeime} (kg)')
+#     logging.debug(f'flux(mask): {plumeflux} (kg/hr)')
+#     logging.debug(f'area(mask): {plumearea} (m^2)')
+#     logging.debug(f'mean(mask): {plumemean} (ppmm)')
+#     logging.debug(f'var(mask):  {plumevar} (ppmm)')
 
 #     # compute cc stats for dists < estimated fetch, positive px only    
 #     cpmeans = np.float32(cpmeans)[dmask]
@@ -856,20 +856,20 @@ def compute_flux(args):
 #     cpflux = ime2flux(cpime,fetchm,windms)
 #     cparea = ps*ps*cpareas.sum()
     
-#     print(f'ime(ccirc+):  {cpime} (kg)')
-#     print(f'flux(ccirc+): {cpflux} (kg/hr)')    
-#     print(f'mean(ccirc+): {cpmean} (ppmm)')
-#     print(f'var(ccirc+):  {cpvar} (ppmm)')
-#     print(f'area(ccirc+): {cparea} (m^2)')
+#     logging.debug(f'ime(ccirc+):  {cpime} (kg)')
+#     logging.debug(f'flux(ccirc+): {cpflux} (kg/hr)')    
+#     logging.debug(f'mean(ccirc+): {cpmean} (ppmm)')
+#     logging.debug(f'var(ccirc+):  {cpvar} (ppmm)')
+#     logging.debug(f'area(ccirc+): {cparea} (m^2)')
 
     ccflux = ime2flux(ccime,fetchm,windms)    
     ccarea = ps*ps*ccareas.sum()
-    # print(f'ime(ccirc*):  {ccime} (kg)')
-    # print(f'flux(ccirc*): {ccflux} (kg/hr)')    
-    # print(f'sum(ccirc*): {ccsum} (ppmm)')
-    # print(f'mean(ccirc*): {ccmean} (ppmm)')
-    # print(f'var(ccirc*):  {ccvar} (ppmm)')
-    # print(f'area(ccirc*): {ccarea} (m^2)')
+    # logging.debug(f'ime(ccirc*):  {ccime} (kg)')
+    # logging.debug(f'flux(ccirc*): {ccflux} (kg/hr)')    
+    # logging.debug(f'sum(ccirc*): {ccsum} (ppmm)')
+    # logging.debug(f'mean(ccirc*): {ccmean} (ppmm)')
+    # logging.debug(f'var(ccirc*):  {ccvar} (ppmm)')
+    # logging.debug(f'area(ccirc*): {ccarea} (m^2)')
 
     # df = pd.DataFrame([[lid,lat,lng,windms,ccime,ccflux,fetchm,
     #                    ccarea,ccmean,ccvar]],columns=dfcols)
@@ -885,11 +885,11 @@ def compute_flux(args):
     cpflux = ime2flux(cpime,fetchm,windms)
     cparea = ps*ps*cpareas.sum()
     
-    print(f'ime(ccirc+):  {cpime} (kg)')
-    print(f'flux(ccirc+): {cpflux} (kg/hr)')    
-    print(f'mean(ccirc+): {cpmean} (ppmm)')
-    print(f'var(ccirc+):  {cpvar} (ppmm)')
-    print(f'area(ccirc+): {cparea} (m^2)')
+    logging.debug(f'ime(ccirc+):  {cpime} (kg)')
+    logging.debug(f'flux(ccirc+): {cpflux} (kg/hr)')    
+    logging.debug(f'mean(ccirc+): {cpmean} (ppmm)')
+    logging.debug(f'var(ccirc+):  {cpvar} (ppmm)')
+    logging.debug(f'area(ccirc+): {cparea} (m^2)')
     # df = pd.DataFrame([[lid,lat,lng,windms,cpime,cpflux,fetchm,
                         # cparea,cpmean,cpvar]],columns=dfcols)
     # df.to_csv(ccposcsvf,index=False)
@@ -905,11 +905,11 @@ def compute_flux(args):
     ctflux = ime2flux(ctime,fetchm,windms)
     ctarea = ps*ps*ctareas.sum()
     
-    print(f'ime(ccirc>):  {ctime} (kg)')
-    print(f'flux(ccirc>): {ctflux} (kg/hr)')    
-    print(f'mean(ccirc>): {ctmean} (ppmm)')
-    print(f'var(ccirc>):  {ctvar} (ppmm)')
-    print(f'area(ccirc>): {ctarea} (m^2)')    
+    logging.debug(f'ime(ccirc>):  {ctime} (kg)')
+    logging.debug(f'flux(ccirc>): {ctflux} (kg/hr)')    
+    logging.debug(f'mean(ccirc>): {ctmean} (ppmm)')
+    logging.debug(f'var(ccirc>):  {ctvar} (ppmm)')
+    logging.debug(f'area(ccirc>): {ctarea} (m^2)')    
 
     # df = pd.DataFrame([[lid,lat,lng,windms,ctime,ctflux,fetchm,
     #                     ctarea,ctmean,ctvar]],columns=dfcols)
@@ -991,9 +991,9 @@ def compute_flux(args):
         sumdiffs = 200*(sumdiffs/sumdiffs.max())
 
         fluxdiffmin,fluxdiffmax = extrema(fluxdiffs[np.isfinite(fluxdiffs)])
-        print(f'extrema(fluxs): {extrema(fluxs[np.isfinite(fluxs)])}')
-        print(f'extrema(imediffs): {extrema(imediffs[np.isfinite(imediffs)])}')
-        print(f'extrema(fluxdiffs): {fluxdiffmin,fluxdiffmax}')
+        logging.debug(f'extrema(fluxs): {extrema(fluxs[np.isfinite(fluxs)])}')
+        logging.debug(f'extrema(imediffs): {extrema(imediffs[np.isfinite(imediffs)])}')
+        logging.debug(f'extrema(fluxdiffs): {fluxdiffmin,fluxdiffmax}')
 
         fluxdiffmax = np.abs([fluxdiffmin,fluxdiffmax]).min()
         fluxdiffmin = -fluxdiffmax
@@ -1008,12 +1008,12 @@ def compute_flux(args):
         rmin,rmax = extrema(rmeandiffs,p=0.95)
         rmax = min(np.abs([rmin,rmax]))
         rmin = -rmax
-        print(f'extrema(rmeandiffs): {rmin,rmax}')    
+        logging.debug(f'extrema(rmeandiffs): {rmin,rmax}')    
         ax[0].scatter(dists,rareadiffs,c=imediffs,cmap='RdYlBu_r')
         optidx1 = np.argmax(np.diff(np.sign(sums-psums)))
         optidx2 = np.argmin(np.abs(sums-psums))
-        print(f'(ime,flux) @ dopt1={dists[optidx1]}: {imes[optidx1],fluxs[optidx1]}')
-        print(f'(ime,flux) @ dopt2={dists[optidx2]}: {imes[optidx2],fluxs[optidx2]}')
+        logging.debug(f'(ime,flux) @ dopt1={dists[optidx1]}: {imes[optidx1],fluxs[optidx1]}')
+        logging.debug(f'(ime,flux) @ dopt2={dists[optidx2]}: {imes[optidx2],fluxs[optidx2]}')
 
         if 0:
             ax[0].set_title('IME diff')
@@ -1193,6 +1193,6 @@ if __name__ == '__main__':
 
     #with open(csv_file_path, 'a', newline='') as file: 
     #    writer = csv.writer(file)
-    #    print('Writing row')
+    #    logging.debug('Writing row')
     #    writer.writerow([fid, status, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps])
     # ## 
