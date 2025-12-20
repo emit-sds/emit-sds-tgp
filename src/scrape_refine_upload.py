@@ -169,8 +169,9 @@ def main(input_args=None):
 
         # Dump out the udpated manual annotations set, so it holds FIDs / orbits for next round
         logging.debug('Dump out the updated manual annotations set, overwrting original')
-        with open(annotation_file, 'w') as fout:
-            fout.write(json.dumps(manual_annotations, cls=plume_io.SerialEncoder)) 
+        plume_io.write_geojson_linebyline(annotation_file, manual_annotations)
+        #with open(annotation_file, 'w') as fout:
+        #    fout.write(json.dumps(manual_annotations, cls=plume_io.SerialEncoder)) 
 
         for feat in manual_annotations['features']:
             if 'dcid' not in feat['properties'].keys():
@@ -324,7 +325,7 @@ def main(input_args=None):
                     'Emissions Rate Estimate Uncertainty (kg/hr)': 'NA',
                     'Fetch Length (m)': 'NA',
                 }
-                if estimate_simple_ime:
+                if estimate_simple_ime and feat['properties']['Simple IME Valid'] == 'Yes':
                     plume_io.write_cog(delivery_uncert_file, cut_uncdat.reshape((cut_uncdat.shape[0], cut_uncdat.shape[1],1)).astype(np.float32), 
                               newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
                     plume_io.write_cog(delivery_sens_file, cut_snsdat.reshape((cut_snsdat.shape[0], cut_snsdat.shape[1],1)).astype(np.float32), 
@@ -346,9 +347,13 @@ def main(input_args=None):
                             self.name_suffix = ''
                             self.plot_path = quant_dir
 
-                            pso = json.loads(feat['properties']['Psuedo-Origin'])
-                            self.lat = pso['coordinates'][1]
-                            self.lng = pso['coordinates'][0]
+                            if feat['properties']['Psuedo-Origin'] in [None, '']:
+                                self.lat = None
+                                self.lng = None
+                            else:
+                                pso = json.loads(feat['properties']['Psuedo-Origin'])
+                                self.lat = pso['coordinates'][1]
+                                self.lng = pso['coordinates'][0]
 
                             self.cmfimgf = delivery_raster_file
                             self.sns_file = delivery_sens_file
@@ -372,6 +377,10 @@ def main(input_args=None):
                         unc_file = None
 
                     lfa = flux_args()
+                    if lfa.lat is None or lfa.lng is None:
+                        logging.debug(f'Plume {lfa.fid} missing Psuedo-Origin, skipping flux calc')
+                        continue
+
                     with open(os.path.join(args.out_dir, f'flux_args_{poly_plume["properties"]["Plume ID"]}.json'),'wb') as pf:
                         pf.write(json.dumps(lfa.__dict__, indent=2).encode('utf-8'))
 
@@ -379,7 +388,7 @@ def main(input_args=None):
                     # Compute Flux
                     #quant_res: [plume_complex, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps, C2_UNC_MASK]
                     flux_status, flux_res = compute_flux.compute_flux(lfa)
-                    logging.info(f'Flux results: {flux_status} {flux_res}')
+                    logging.debug(f'Flux results: {flux_status} {flux_res}')
 
                     # Compute Windspeed
                     original_log_level = logging.getLogger().level
@@ -413,7 +422,7 @@ def main(input_args=None):
                     emissions_info['Wind Speed Source'] = ws_source[0].upper()
                     emissions_info['Emissions Rate Estimate (kg/hr)'] = float(np.round(Q.values[0],4))
                     emissions_info['Emissions Rate Estimate Uncertainty (kg/hr)'] = float(np.round(sigma_Q.values[0],4))
-                    
+
                     emissions_info['Fetch Length (m)'] = float(np.round(flux_res[5],4))
                     logging.info(f'Populated emissions info: {emissions_info}')
 

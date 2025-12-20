@@ -61,7 +61,12 @@ def add_fids(manual_annotations, coverage, manual_annotations_previous):
         previous_plume_ids = [x['properties']['Plume ID'] for x in manual_annotations_previous['features']]
 
     updated_plumes=[]
-    todel=[]
+    todel = []
+    del_msg = []
+
+    dm_mr1 = 'Missing "R1 - Reviewed" field'
+    dm_int = 'Deleting entry from no intersection'
+    dm_emis = 'Entries desiring emissions estimate need Psuedo-Origin'
 
     # do some dataframe conversion once ahead of time to make things faster
     coverage_df = pd.json_normalize(coverage['features'])
@@ -74,10 +79,16 @@ def add_fids(manual_annotations, coverage, manual_annotations_previous):
         # If this key isn't present, then the full feature wasn't really added yet
         if 'R1 - Reviewed' not in feat['properties'].keys():
             todel.append(_feat)
-            logging.info(f'R1 - Reviewed not in {feat["properties"]}')
+            del_msg.append(dm_mr1)
             continue # This is insufficient
-        plume_id = feat['properties']['Plume ID']
 
+        if  feat['properties']['Simple IME Valid'] == 'Yes' and \
+            ('Psuedo-Origin' not in feat['properties'].keys() or feat['properties']['Psuedo-Origin'] in [None, '']):
+            todel.append(_feat)
+            del_msg.append(dm_emis)
+            continue
+
+        plume_id = feat['properties']['Plume ID']
         if plume_id in previous_plume_ids:
             new_geom = feat['geometry']['coordinates']
             prev_idx = previous_plume_ids.index(plume_id)
@@ -103,27 +114,53 @@ def add_fids(manual_annotations, coverage, manual_annotations_previous):
                                                   feat['properties']['Time Range End'] + 'Z') 
         if len(subset_features) == 0:
             todel.append(_feat)
+            del_msg.append(dm_int)
         else:
             fids = [subset_features[x]['properties']['fid'].split('_')[0] for x in range(len(subset_features))]
             manual_annotations_fid['features'][_feat]['properties']['fids'] = fids
             updated_plumes.append(_feat)
 
+
     if len(todel) > 0:
-        logging.warning('Bad metadata for the following plumes:')
-        for td in np.array(todel)[::-1]:
-            msg = f'{manual_annotations_fid["features"][td]["properties"]["Plume ID"]}'
-            logging.warning(msg)
-        for td in np.array(todel)[::-1]:
-            msg = f'Deleting entry due to bad metadata - check input {manual_annotations_fid["features"][td]["properties"]}'
+        logging.warning('The following plumes have metadata issues that need to be resolved, skipping all for now:')
+        for td, rationale in zip(np.array(todel)[::-1], np.array(del_msg)[::-1]):
+            msg = f'{manual_annotations_fid["features"][td]["properties"]["Plume ID"]} - Reason: {rationale}'
             logging.warning(msg)
             manual_annotations_fid['features'].pop(td)
 
-    updated_plumes = np.array([x for x in updated_plumes if x not in todel]) # shouldn't be necessary anymore, deosn't hurt
-    for td in np.array(todel)[::-1]:
-        updated_plumes[updated_plumes >= td] -= 1
-    updated_plumes = updated_plumes.tolist()
+        updated_plumes = np.array([x for x in updated_plumes if x not in todel]) # shouldn't be necessary anymore, deosn't hurt
+        for td in np.array(todel)[::-1]:
+            updated_plumes[updated_plumes >= td] -= 1
+        updated_plumes = updated_plumes.tolist()
+
+
+    #if len(todel) > 0:
+    #    logging.warning('Incomplete intersection (likely bad time bounds) for the following plumes:')
+    #    for td in np.array(todel)[::-1]:
+    #        msg = f'Deleting entry from no intersection - check input {manual_annotations_fid["features"][td]["properties"]["Plume ID"]}'
+    #        logging.warning(msg)
+    #        manual_annotations_fid['features'].pop(td)
+
+    #updated_plumes = np.array([x for x in updated_plumes if x not in todel]) # shouldn't be necessary anymore, deosn't hurt
+    #for td in np.array(todel)[::-1]:
+    #    updated_plumes[updated_plumes >= td] -= 1
+    #updated_plumes = updated_plumes.tolist()
 
     return manual_annotations_fid, updated_plumes
+
+def clear_bad(todel, manual_annotations, updated_plumes, rationale=''):
+    if len(todel) > 0:
+        for td in np.array(todel)[::-1]:
+            msg = f'{manual_annotations["features"][td]["properties"]["Plume ID"]} - Reason: {rationale}'
+            logging.warning(msg)
+            manual_annotations['features'].pop(td)
+
+        updated_plumes = np.array([x for x in updated_plumes if x not in todel]) # shouldn't be necessary anymore, deosn't hurt
+        for td in np.array(todel)[::-1]:
+            updated_plumes[updated_plumes >= td] -= 1
+        updated_plumes = updated_plumes.tolist()
+    return manual_annotations, updated_plumes
+
 
 
 def add_orbits(annotations, indices_to_update, database):
