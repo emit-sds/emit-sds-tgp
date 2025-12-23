@@ -263,15 +263,15 @@ def main(input_args=None):
                 else:
                     combined_mask = np.logical_or(combined_mask, loc_fid_mask)
 
-                cut_plume_mask, newp_trans, s = plume_io.trim_plume(loc_fid_mask, trans, buffer=args.plume_buffer_px)
-                cut_plume_data, _, s = plume_io.trim_plume(ortdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
-                if s is False:
+                cut_plume_mask, newp_trans = plume_io.trim_plume(loc_fid_mask, trans, buffer=args.plume_buffer_px)
+                cut_plume_data, _ = plume_io.trim_plume(ortdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
+                if cut_plume_data is None:
                     logging.warning(f'Plume {feat["properties"]["Plume ID"]} has no valid pixels after trimming, skipping plume')
                     continue
 
                 if estimate_simple_ime:
-                    cut_uncdat, _, s = plume_io.trim_plume(uncdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
-                    cut_snsdat, _, s = plume_io.trim_plume(snsdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
+                    cut_uncdat, _ = plume_io.trim_plume(uncdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
+                    cut_snsdat, _ = plume_io.trim_plume(snsdat, trans, badmask=loc_fid_mask == 0, nodata_value=-9999, buffer=args.plume_buffer_px)
 
 
 
@@ -320,117 +320,131 @@ def main(input_args=None):
                           newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
                 plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file)
 
-                emissions_info = {
-                    'Wind Speed (m/s)': 'NA',
-                    'Wind Speed Std (m/s)': 'NA',
-                    'Wind Speed Source': 'NA',
-                    'Emissions Rate Estimate (kg/hr)': 'NA',
-                    'Emissions Rate Estimate Uncertainty (kg/hr)': 'NA',
-                    'Fetch Length (m)': 'NA',
-                }
-                if estimate_simple_ime and feat['properties']['Simple IME Valid'] == 'Yes':
+                if estimate_simple_ime:
                     plume_io.write_cog(delivery_uncert_file, cut_uncdat.reshape((cut_uncdat.shape[0], cut_uncdat.shape[1],1)).astype(np.float32), 
                               newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
                     plume_io.write_cog(delivery_sens_file, cut_snsdat.reshape((cut_snsdat.shape[0], cut_snsdat.shape[1],1)).astype(np.float32), 
                               newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
 
+                # Compute Emissions
+                emissions_info, eis = compute_Q_and_uncertainty_utils.single_plume_emissions(
+                    feat,
+                    poly_plume,
+                    quant_dir,
+                    proc_dir,
+                    delivery_raster_file,
+                    delivery_sens_file,
+                    delivery_uncert_file,
+                    working_windspeed_csv,
+                    annotation_file,
+                )
 
-                    class flux_args:
-                        def __init__(self):
-                            self.minppmm = 500
-                            self.mergedistm = 200
-                            self.maxppmm = 3000
-                            self.maxfetchm = 1000
-                            self.minaream2 = 0
+                #emissions_info = {
+                #    'Wind Speed (m/s)': 'NA',
+                #    'Wind Speed Std (m/s)': 'NA',
+                #    'Wind Speed Source': 'NA',
+                #    'Emissions Rate Estimate (kg/hr)': 'NA',
+                #    'Emissions Rate Estimate Uncertainty (kg/hr)': 'NA',
+                #    'Fetch Length (m)': 'NA',
+                #}
+                #if estimate_simple_ime and feat['properties']['Simple IME Valid'] == 'Yes':
 
-                            self.plot_diag = True
-                            self.verbose = False
-                            self.fid = poly_plume['properties']['Plume ID']
+                #    class flux_args:
+                #        def __init__(self):
+                #            self.minppmm = 500
+                #            self.mergedistm = 200
+                #            self.maxppmm = 3000
+                #            self.maxfetchm = 1000
+                #            self.minaream2 = 0
 
-                            self.name_suffix = ''
-                            self.plot_path = quant_dir
+                #            self.plot_diag = True
+                #            self.verbose = False
+                #            self.fid = poly_plume['properties']['Plume ID']
 
-                            if feat['properties']['Psuedo-Origin'] in [None, '']:
-                                self.lat = None
-                                self.lng = None
-                            else:
-                                pso = json.loads(feat['properties']['Psuedo-Origin'])
-                                self.lat = pso['coordinates'][1]
-                                self.lng = pso['coordinates'][0]
+                #            self.name_suffix = ''
+                #            self.plot_path = quant_dir
 
-                            self.cmfimgf = delivery_raster_file
-                            self.sns_file = delivery_sens_file
-                            self.unc_file = delivery_uncert_file
+                #            if feat['properties']['Psuedo-Origin'] in [None, '']:
+                #                self.lat = None
+                #                self.lng = None
+                #            else:
+                #                pso = json.loads(feat['properties']['Psuedo-Origin'])
+                #                self.lat = pso['coordinates'][1]
+                #                self.lng = pso['coordinates'][0]
+
+                #            self.cmfimgf = delivery_raster_file
+                #            self.sns_file = delivery_sens_file
+                #            self.unc_file = delivery_uncert_file
  
-                            mb_coords = poly_plume['geometry']['coordinates']
-                            if isinstance(mb_coords[0][0], List):
-                                mb_coords = mb_coords[0] 
-                            self.manual_boundary_coordinates_lon_lat = [item for sublist in mb_coords for item in sublist]
+                #            mb_coords = poly_plume['geometry']['coordinates']
+                #            if isinstance(mb_coords[0][0], List):
+                #                mb_coords = mb_coords[0] 
+                #            self.manual_boundary_coordinates_lon_lat = [item for sublist in mb_coords for item in sublist]
 
-                            self.mask_mode = 'infer'
-                            self.q_method = 'mask'
+                #            self.mask_mode = 'infer'
+                #            self.q_method = 'mask'
 
-                            self.rgbimgf = None
-                            self.labimgf = None
+                #            self.rgbimgf = None
+                #            self.labimgf = None
 
-                            #self.log_level = args.loglevel
-                            self.log_level = 'DEBUG'
-                            self.logfile = None
+                #            #self.log_level = args.loglevel
+                #            self.log_level = 'DEBUG'
+                #            self.logfile = None
 
-                        unc_file = None
+                #        unc_file = None
 
-                    lfa = flux_args()
-                    if lfa.lat is None or lfa.lng is None:
-                        logging.debug(f'Plume {lfa.fid} missing Psuedo-Origin, skipping plume')
-                        continue
+                #    lfa = flux_args()
+                #    if lfa.lat is None or lfa.lng is None:
+                #        logging.debug(f'Plume {lfa.fid} missing Psuedo-Origin, skipping plume')
+                #        continue
 
-                    with open(os.path.join(proc_dir, f'flux_args_{poly_plume["properties"]["Plume ID"]}.json'),'wb') as pf:
-                        pf.write(json.dumps(lfa.__dict__, indent=2).encode('utf-8'))
+                #    with open(os.path.join(proc_dir, f'flux_args_{poly_plume["properties"]["Plume ID"]}.json'),'wb') as pf:
+                #        pf.write(json.dumps(lfa.__dict__, indent=2).encode('utf-8'))
 
 
-                    # Compute Flux
-                    #quant_res: [plume_complex, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps, C2_UNC_MASK]
-                    flux_status, flux_res = compute_flux.compute_flux(lfa)
-                    if flux_status != 'success':
-                        logging.warning(f'Flux calculation failed for plume {lfa.fid} with status {flux_status}, skipping plume')
-                        continue
-                    logging.debug(f'Flux results: {flux_status} {flux_res}')
+                #    # Compute Flux
+                #    #quant_res: [plume_complex, C_Q_MASK, C_Q_CC, lng, lat, fetchm, mergedistm, args.minppmm, args.maxppmm, args.minaream2, ps, C2_UNC_MASK]
+                #    flux_status, flux_res = compute_flux.compute_flux(lfa)
+                #    if flux_status != 'success':
+                #        logging.warning(f'Flux calculation failed for plume {lfa.fid} with status {flux_status}, skipping plume')
+                #        continue
+                #    logging.debug(f'Flux results: {flux_status} {flux_res}')
 
-                    # Compute Windspeed
-                    original_log_level = logging.getLogger().level
-                    logging.getLogger().setLevel(logging.ERROR)
-                    windspeed.update_EMIT_plume_list_windspeeds(working_windspeed_csv,
-                                                                plume_file=annotation_file,
-                                                                write_rate=1,
-                                                                plume_list=[poly_plume['properties']['Plume ID']]
-                                                                )
-                    logging.getLogger().setLevel(original_log_level)
-                    wsk = windspeed.windspeed_key_names('hrrr', 'era5', 'w10', 'm_per_s')
+                #    # Compute Windspeed
+                #    original_log_level = logging.getLogger().level
+                #    logging.getLogger().setLevel(logging.ERROR)
+                #    windspeed.update_EMIT_plume_list_windspeeds(working_windspeed_csv,
+                #                                                plume_file=annotation_file,
+                #                                                write_rate=1,
+                #                                                plume_list=[poly_plume['properties']['Plume ID']]
+                #                                                )
+                #    logging.getLogger().setLevel(original_log_level)
+                #    wsk = windspeed.windspeed_key_names('hrrr', 'era5', 'w10', 'm_per_s')
 
-                    dfw = pd.read_csv(working_windspeed_csv)
-                    dfw = dfw[dfw['plume_id'] == poly_plume['properties']['Plume ID']]
+                #    dfw = pd.read_csv(working_windspeed_csv)
+                #    dfw = dfw[dfw['plume_id'] == poly_plume['properties']['Plume ID']]
 
-                    ws = dfw[wsk['primary']].fillna(dfw[wsk['secondary']])
-                    ws_std = dfw[wsk['primary_std']].fillna(dfw[wsk['secondary_std']])
-                    ws_source = np.where(dfw[wsk['primary']].notna(), 'hrrr', 'era5')
+                #    ws = dfw[wsk['primary']].fillna(dfw[wsk['secondary']])
+                #    ws_std = dfw[wsk['primary_std']].fillna(dfw[wsk['secondary_std']])
+                #    ws_source = np.where(dfw[wsk['primary']].notna(), 'hrrr', 'era5')
 
-                    # Compute Emissions
-                    Q, sigma_Q, sigma_C, sigma_w, sigma_f = \
-                        compute_Q_and_uncertainty_utils.compute_Q_and_uncertainty(
-                            flux_res[1], # C_Q_mask_kg_hr_mpers
-                            flux_res[11], #sum_C_sqrd
-                            ws, 
-                            ws_std, 
-                            flux_res[5], #fetch
-                            0.0) #fetch_unc_frac
-                    emissions_info['Wind Speed (m/s)'] = float(np.round(ws.values[0],4))
-                    emissions_info['Wind Speed Std (m/s)'] = float(np.round(ws_std.values[0],4))
-                    emissions_info['Wind Speed Source'] = ws_source[0].upper()
-                    emissions_info['Emissions Rate Estimate (kg/hr)'] = float(np.round(Q.values[0],4))
-                    emissions_info['Emissions Rate Estimate Uncertainty (kg/hr)'] = float(np.round(sigma_Q.values[0],4))
+                #    # Compute Emissions
+                #    Q, sigma_Q, sigma_C, sigma_w, sigma_f = \
+                #        compute_Q_and_uncertainty_utils.compute_Q_and_uncertainty(
+                #            flux_res[1], # C_Q_mask_kg_hr_mpers
+                #            flux_res[11], #sum_C_sqrd
+                #            ws, 
+                #            ws_std, 
+                #            flux_res[5], #fetch
+                #            0.0) #fetch_unc_frac
+                #    emissions_info['Wind Speed (m/s)'] = float(np.round(ws.values[0],4))
+                #    emissions_info['Wind Speed Std (m/s)'] = float(np.round(ws_std.values[0],4))
+                #    emissions_info['Wind Speed Source'] = ws_source[0].upper()
+                #    emissions_info['Emissions Rate Estimate (kg/hr)'] = float(np.round(Q.values[0],4))
+                #    emissions_info['Emissions Rate Estimate Uncertainty (kg/hr)'] = float(np.round(sigma_Q.values[0],4))
 
-                    emissions_info['Fetch Length (m)'] = float(np.round(flux_res[5],4))
-                    logging.info(f'Populated emissions info: {emissions_info}')
+                #    emissions_info['Fetch Length (m)'] = float(np.round(flux_res[5],4))
+                #    logging.info(f'Populated emissions info: {emissions_info}')
 
                 poly_plume['properties'].update(emissions_info)
                 point_plume['properties'].update(emissions_info)
@@ -439,32 +453,33 @@ def main(input_args=None):
                 updated_plumes_poly.append(poly_plume)
                 plume_io.write_json(delivery_json_file, poly_plume, meta['Source_Scenes'])
 
-        ########## Step 5 ##########
-        for plm in updated_plumes_poly:
-            existing_match_index = [_x for _x, x in enumerate(outdict['features']) if plm['properties']['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] != 'Point']
-            if len(existing_match_index) > 2:
-                logging.warning("HELP! Too many matching indices")
-            if len(existing_match_index) > 0:
-                outdict['features'][existing_match_index[0]] = plm
-            else:
-                outdict['features'].append(plm)
+
+            ########## Step 5 ##########
+            for plm in updated_plumes_poly:
+                existing_match_index = [_x for _x, x in enumerate(outdict['features']) if plm['properties']['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] != 'Point']
+                if len(existing_match_index) > 2:
+                    logging.warning("HELP! Too many matching indices")
+                if len(existing_match_index) > 0:
+                    outdict['features'][existing_match_index[0]] = plm
+                else:
+                    outdict['features'].append(plm)
  
-        for plm in updated_plumes_point:
-            existing_match_index = [_x for _x, x in enumerate(outdict['features']) if plm['properties']['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] == 'Point']
-            if len(existing_match_index) > 2:
-                logging.warning("HELP! Too many matching indices")
-            if len(existing_match_index) > 0:
-                outdict['features'][existing_match_index[0]] = plm
-            else:
-                outdict['features'].append(plm)
+            for plm in updated_plumes_point:
+                existing_match_index = [_x for _x, x in enumerate(outdict['features']) if plm['properties']['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] == 'Point']
+                if len(existing_match_index) > 2:
+                    logging.warning("HELP! Too many matching indices")
+                if len(existing_match_index) > 0:
+                    outdict['features'][existing_match_index[0]] = plm
+                else:
+                    outdict['features'].append(plm)
 
-        plume_io.write_geojson_linebyline(output_json, outdict) # Final write
+            plume_io.write_geojson_linebyline(output_json, outdict) # Final write
 
 
-        # Sync
-        utils.print_and_call(f'cp {annotation_file} {previous_annotation_file}')
-        #print_and_call(f'rsync -a --info=progress2 {tile_dir}/{od_date}/ brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/mosaics/{args.type}_plume_tiles_working/{od_date}/ --delete')
-        #print_and_call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/converted_manual_{args.type}_plumes.json')
+            # Sync
+            utils.print_and_call(f'cp {annotation_file} {previous_annotation_file}')
+            #print_and_call(f'rsync -a --info=progress2 {tile_dir}/{od_date}/ brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/mosaics/{args.type}_plume_tiles_working/{od_date}/ --delete')
+            #print_and_call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/converted_manual_{args.type}_plumes.json')
 
 
 
