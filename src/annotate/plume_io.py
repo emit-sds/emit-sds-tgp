@@ -272,3 +272,27 @@ def trim_plume(plume_mask_in, trans, badmask=None, nodata_value=0, buffer=0):
     outtrans[3] += min_y * trans[5]
     return trimmed_mask, outtrans
 
+def get_window(rawspace_coords, trans, ds_size, buffer_px):
+
+    xs = [x[0] for x in rawspace_coords]
+    ys = [x[1] for x in rawspace_coords]
+    min_x = max(0, int(np.min(xs)) - buffer_px)
+    max_x = min(ds_size[1] - 1, int(np.max(xs)) + buffer_px)
+    min_y = max(0, int(np.min(ys)) - buffer_px)
+    max_y = min(ds_size[0] - 1, int(np.max(ys)) + buffer_px)
+    
+    win_w = max_x - min_x
+    win_h = max_y - min_y
+    
+    if win_w <= 0 or win_h <= 0:
+        return None, None, None
+    
+    # Window transform
+    window_trans = list(trans)
+    window_trans[0] += min_x * trans[1]
+    window_trans[3] += min_y * trans[5]
+
+    # Local coords for mask
+    local_coords = [[x[0] - min_x, x[1] - min_y] for x in rawspace_coords]
+
+    return (min_x, min_y, win_w, win_h), window_trans, local_coords
