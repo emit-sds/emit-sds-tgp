@@ -72,6 +72,7 @@ def main(input_args=None):
     parser.add_argument('--plume_buffer_px', type=int, default=30, help='number of pixels to buffer plume cutouts by')
     parser.add_argument('--write_dcid_tifs', action='store_true', help='write out dcid level tifs for debugging')
     parser.add_argument('--n_cores', type=int, default=1, help='number of CPUs to use')
+    parser.add_argument('--num_dcids', type=int, default=-1, help='number of DCIDs to process, -1 for all')
     args = parser.parse_args(input_args)
 
     logging.basicConfig(format='%(levelname)s:%(asctime)s ||| %(message)s', level=args.loglevel,
@@ -111,12 +112,13 @@ def main(input_args=None):
 
         logging.debug('Load pre-existing public-facing outputs (combined)')
         outdict = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84" }, "type": "name"},"features":[],"name":"methane_metadata","type":"FeatureCollection" }
-        if os.path.isfile(fn.output_json):
-            outdict = json.load(open(fn.output_json,'r'))
+        if os.path.isfile(fn.output_json_internal):
+            outdict = json.load(open(fn.output_json_internal,'r'))
 
+        logging.info(f'Total plumes: {len(manual_annotations["features"])}')
         logging.debug('Run Spatial-Temporal Intersection to find FIDs')
         manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, manual_annotations_previous)
-        logging.info(f'New plume, post fid: {len(new_plumes)}')
+        logging.info(f'New plumes, post fid filter: {len(new_plumes)}')
         manual_annotations_df = pd.json_normalize(manual_annotations['features'])
         most_recent_plume_create = pd.to_datetime(manual_annotations_df['properties.Time Created']).max()
         last_time_range = pd.to_datetime(manual_annotations_df['properties.Time Range End']).dt.tz_localize('UTC').max()
@@ -156,6 +158,9 @@ def main(input_args=None):
         unique_orbits = np.unique([manual_annotations['features'][x]['properties']['orbit'] for x in new_plumes]).tolist()
         unique_dcids = np.unique([manual_annotations['features'][x]['properties']['dcid'] for x in new_plumes]).tolist()
 
+        if args.num_dcids > 0:
+            unique_dcids = unique_dcids[0:args.num_dcids]
+
         # Dump out the udpated manual annotations set, so it holds FIDs / orbits for next round
         logging.debug('Dump out the updated manual annotations set, overwrting original')
         plume_io.write_geojson_linebyline(fn.annotation_file, manual_annotations)
@@ -164,6 +169,7 @@ def main(input_args=None):
             if 'dcid' not in feat['properties'].keys():
                 logging.error('Feature missing DCID: {feat}')
 
+        updated_windspeeds = []
         if args.n_cores > 1:
             import ray
 
@@ -179,11 +185,14 @@ def main(input_args=None):
 
             # Step 5
             for res in results:
-                updated_plumes_point, updated_plumes_poly = res
-                outdict = update_features(outdict, updated_plumes_poly, is_point=False)
-                outdict = update_features(outdict, updated_plumes_point, is_point=True)
+                updated_plumes_point, updated_plumes_poly, ws_update = res
+                outdict = update_features(outdict, updated_plumes_poly, is_point=False, add_imgs=True, fn=fn, gtype=args.type)
+                outdict = update_features(outdict, updated_plumes_point, is_point=True, add_imgs=True, fn=fn, gtype=args.type)
+                updated_windspeeds.extend(ws_update)
 
-            plume_io.write_geojson_linebyline(fn.output_json, outdict) # Final write
+            # Final write
+            plume_io.write_geojson_linebyline(fn.output_json_internal, outdict)
+            plume_io.write_external_geojson(fn.output_json_internal, fn.output_json_external)
             utils.print_and_call(f'cp {fn.annotation_file} {fn.previous_annotation_file}')
             ray.shutdown()
 
@@ -194,15 +203,25 @@ def main(input_args=None):
             for dcid in unique_dcids:
 
                 # Step 3 and 4
-                updated_plumes_point, updated_plumes_poly = process_dcid(dcid, manual_annotations, new_plumes, fn, args)
+                updated_plumes_point, updated_plumes_poly, ws_update = process_dcid(dcid, manual_annotations, new_plumes, fn, args)
+                updated_windspeeds.extend(ws_update)
 
                 # Step 5
-                outdict = update_features(outdict, updated_plumes_poly, is_point=False)
-                outdict = update_features(outdict, updated_plumes_point, is_point=True)
+                outdict = update_features(outdict, updated_plumes_poly, is_point=False, add_imgs=True, fn=fn, gtype=args.type)
+                outdict = update_features(outdict, updated_plumes_point, is_point=True, add_imgs=True, fn=fn, gtype=args.type)
 
                 utils.print_and_call(f'cp {fn.annotation_file} {fn.previous_annotation_file}')
-                plume_io.write_geojson_linebyline(fn.output_json, outdict) # Final write
-
+                plume_io.write_geojson_linebyline(fn.output_json_internal, outdict) # Final write
+                plume_io.write_external_geojson(fn.output_json_internal, fn.output_json_external)
+        
+        updated_windspeeds = [x for x in updated_windspeeds if x is not None]
+        if os.path.isfile(fn.working_windspeed_csv):
+            wd_df = pd.read_csv(fn.working_windspeed_csv)
+            ws_df = pd.concat([wd_df, pd.DataFrame(updated_windspeeds)], ignore_index=True)
+        else:
+            ws_df = pd.DataFrame(updated_windspeeds)
+        ws_df.drop_duplicates(subset=['plume_id'], keep='last', inplace=True)
+        ws_df.to_csv(fn.working_windspeed_csv, index=False)
 
         # Sync
         #print_and_call(f'rsync -a --info=progress2 {tile_dir}/{od_date}/ brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/mosaics/{args.type}_plume_tiles_working/{od_date}/ --delete')
@@ -216,7 +235,10 @@ class Filenames:
         self.annotation_file_raw = os.path.join(args.out_dir, "manual_annotation_raw.json") # Straight from MMGIS
         self.annotation_file = os.path.join(args.out_dir, "manual_annotation.json") # MMGIS + FIDs + Orbits 
         self.previous_annotation_file = os.path.join(args.out_dir, "previous_manual_annotation.json") # Last editted version of annotation file
-        self.output_json = os.path.join(args.out_dir, 'combined_plume_metadata.json') # Output (public facing) metadata file
+
+        # Output / intput jsons are identical, internal just includes additional information
+        self.output_json_external = os.path.join(args.out_dir, 'combined_plume_metadata_external.json') # Output (public facing) metadata file
+        self.output_json_internal = os.path.join(args.out_dir, 'combined_plume_metadata_internal.json') # Output (internal facing) metadata file
         self.delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
         self.quant_dir = os.path.join(args.out_dir, 'quantification') # Quantification working directory
         self.proc_dir = os.path.join(args.out_dir, 'processing') # Processing working directory
@@ -253,6 +275,21 @@ class Filenames:
         delivery_sens_file = delivery_raster_file.replace(gtype.upper(), gtype.upper() + '_SNS')
 
         return delivery_raster_file, delivery_ql_file, delivery_json_file, delivery_uncert_file, delivery_sens_file
+    
+    def mmgis_q_img_filename_dict(self, plume, gtype):
+
+        basedir = f'Layers/mosaics/images/{gtype}_q/'
+        img_dicts = [{
+                'name': 'Quantification Mask',
+                'url': basedir +  plume['properties']['Plume ID'] + '_ql.png',
+                'type': 'image'
+                },
+                {
+                'name': 'Quantification Sweep',
+                'url': basedir +  plume['properties']['Plume ID'] + '_sweep.pdf',
+                'type': 'document'
+            }]
+        return img_dicts
 
 
 
@@ -284,25 +321,20 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
         dcid_ort_tif_file = dcid_ort_vrt_file  # just use the VRT directly to save space/time
 
     ort_ds = gdal.Open(dcid_ort_tif_file)
-    #ortdat = ort_ds.ReadAsArray().squeeze()
     trans = ort_ds.GetGeoTransform()
 
     # Only create sns and unc if needed
-    estimate_simple_ime = np.sum([manual_annotations['features'][x]['properties']['Simple IME Valid'] == 'Yes' for x in plumes_idx_in_dcid]) > 0
-    snsdat, uncdat = None, None
-    if estimate_simple_ime:
-        utils.print_and_call(f'gdalbuildvrt {dcid_ort_unc_vrt_file} {" ".join(unc_dat_files)} --quiet')
-        utils.print_and_call(f'gdalbuildvrt {dcid_ort_sns_vrt_file} {" ".join(ort_sens_files)} --quiet')
-        if args.write_dcid_tifs:
-            utils.print_and_call(f'gdal_translate {dcid_ort_unc_vrt_file} {dcid_ort_unc_tif_file} -co COMPRESS=LZW --quiet')
-            utils.print_and_call(f'gdal_translate {dcid_ort_sns_vrt_file} {dcid_ort_sns_tif_file} -co COMPRESS=LZW --quiet')
-        else:
-            dcid_ort_unc_tif_file = dcid_ort_unc_vrt_file
-            dcid_ort_sns_tif_file = dcid_ort_sns_vrt_file
-        #uncdat = gdal.Open(dcid_ort_unc_tif_file).ReadAsArray().squeeze()
-        #snsdat = gdal.Open(dcid_ort_sns_tif_file).ReadAsArray().squeeze()
-        unc_ds = gdal.Open(dcid_ort_unc_tif_file)
-        sns_ds = gdal.Open(dcid_ort_sns_tif_file)
+
+    utils.print_and_call(f'gdalbuildvrt {dcid_ort_unc_vrt_file} {" ".join(unc_dat_files)} --quiet')
+    utils.print_and_call(f'gdalbuildvrt {dcid_ort_sns_vrt_file} {" ".join(ort_sens_files)} --quiet')
+    if args.write_dcid_tifs:
+        utils.print_and_call(f'gdal_translate {dcid_ort_unc_vrt_file} {dcid_ort_unc_tif_file} -co COMPRESS=LZW --quiet')
+        utils.print_and_call(f'gdal_translate {dcid_ort_sns_vrt_file} {dcid_ort_sns_tif_file} -co COMPRESS=LZW --quiet')
+    else:
+        dcid_ort_unc_tif_file = dcid_ort_unc_vrt_file
+        dcid_ort_sns_tif_file = dcid_ort_sns_vrt_file
+    unc_ds = gdal.Open(dcid_ort_unc_tif_file)
+    sns_ds = gdal.Open(dcid_ort_sns_tif_file)
 
     # Calculate pixel size for DCID
     proj_ds = gdal.Warp('', dcid_ort_tif_file, dstSRS='EPSG:3857', format='VRT')
@@ -314,10 +346,12 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
 
     ######## Step 3 ##############
     # Use the manual plumes to come up with a new set of plume masks and labels
-    updated_plumes_poly, updated_plumes_point = [], [] 
+    updated_plumes_poly, updated_plumes_point, updated_windspeed = [], [], []
     for newp in plumes_idx_in_dcid:
         feat = manual_annotations['features'][newp]
         logging.info(f'Building output plume {feat["properties"]["Plume ID"]}')
+
+        deliver_emissions = feat['properties']['Simple IME Valid'] == 'Yes'
 
         rawspace_coords = plume_io.rawspace_coordinate_conversion([], feat['geometry']['coordinates'][0], trans, ortho=True)
 
@@ -328,6 +362,9 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
             continue
 
         cut_plume_data = ort_ds.ReadAsArray(window[0], window[1], window[2], window[3]).squeeze()
+        cut_uncdat = unc_ds.ReadAsArray(window[0], window[1], window[2], window[3]).squeeze()
+        cut_snsdat = sns_ds.ReadAsArray(window[0], window[1], window[2], window[3]).squeeze()
+
         manual_mask = rasterize(shapes=[Polygon(local_coords)], out_shape=(cut_plume_data.shape[0],cut_plume_data.shape[1]), dtype=np.uint8) # numpy binary mask for manual IDs
 
         plumestyle = 'classic'
@@ -340,10 +377,6 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
         elif plumestyle == 'manual':    
             loc_fid_mask = manual_mask.astype(bool)
         
-        if estimate_simple_ime:
-            cut_uncdat = unc_ds.ReadAsArray(window[0], window[1], window[2], window[3]).squeeze()
-            cut_snsdat = sns_ds.ReadAsArray(window[0], window[1], window[2], window[3]).squeeze()
-
 
         ############  Step 4 ###########
         outmask_finepoly_file, outmask_poly_file, outmask_ort_file = fn.feature_filenames(feat) 
@@ -379,14 +412,13 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
                   newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
         plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file)
 
-        if estimate_simple_ime:
-            plume_io.write_cog(delivery_uncert_file, cut_uncdat.reshape((cut_uncdat.shape[0], cut_uncdat.shape[1],1)).astype(np.float32), 
-                      newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
-            plume_io.write_cog(delivery_sens_file, cut_snsdat.reshape((cut_snsdat.shape[0], cut_snsdat.shape[1],1)).astype(np.float32), 
-                      newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
+        plume_io.write_cog(delivery_uncert_file, cut_uncdat.reshape((cut_uncdat.shape[0], cut_uncdat.shape[1],1)).astype(np.float32), 
+                  newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
+        plume_io.write_cog(delivery_sens_file, cut_snsdat.reshape((cut_snsdat.shape[0], cut_snsdat.shape[1],1)).astype(np.float32), 
+                  newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
 
         # Compute Emissions
-        emissions_info, eis = compute_Q_and_uncertainty_utils.single_plume_emissions(
+        emissions_info, windspeed_info = compute_Q_and_uncertainty_utils.single_plume_emissions(
             feat,
             poly_plume,
             fn.quant_dir,
@@ -394,33 +426,51 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
             delivery_raster_file,
             delivery_sens_file,
             delivery_uncert_file,
-            fn.working_windspeed_csv,
             fn.annotation_file,
+            working_windspeed_csv=fn.working_windspeed_csv,
+            overrule_simple_ime_flag=True, # we want to run the calc no matter what - we'll discard later per metadata
         )
 
 
         poly_plume['properties'].update(emissions_info)
         point_plume['properties'].update(emissions_info)
 
+        # For the delivery file, if not flagged for emissions delivery, don't include
+        plume_io.write_delivery_json(delivery_json_file, poly_plume, meta['DAAC Scene Names'], deliver_emissions)
+
+        # Now save for output / archive jsons
         updated_plumes_point.append(point_plume)
         updated_plumes_poly.append(poly_plume)
-        plume_io.write_json(delivery_json_file, poly_plume, meta['Source_Scenes'])
-    return updated_plumes_point, updated_plumes_poly
+        if windspeed_info is not None:
+            updated_windspeed.append(windspeed_info)
 
 
-def update_features(existing: dict, new_features: List, is_point: bool):
+    return updated_plumes_point, updated_plumes_poly, updated_windspeed
+
+
+def update_features(existing: dict, new_features: List, is_point: bool, add_imgs: dict=None, fn: Filenames=None, gtype: str = 'ch4') -> dict:
+
+    if int(add_imgs is not None) + int(fn is not None) == 1:
+        logging.warning('Both add_imgs and fn must be provided, or neither; skipping image addition')
+
     ########## Step 5 ##########
     for plm in new_features:
         if is_point:
             existing_match_index = [_x for _x, x in enumerate(existing['features']) if plm['properties']['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] == 'Point']
         else:
             existing_match_index = [_x for _x, x in enumerate(existing['features']) if plm['properties']['Plume ID'] == x['properties']['Plume ID'] and x['geometry']['type'] != 'Point']
+            
         if len(existing_match_index) > 2:
             logging.warning("HELP! Too many matching indices")
+
+        if add_imgs is not None and fn is not None:
+            plm['properties']['images'] = fn.mmgis_q_img_filename_dict(plm, gtype.lower())
+
         if len(existing_match_index) > 0:
             existing['features'][existing_match_index[0]] = plm
         else:
             existing['features'].append(plm)
+        
         
     return existing
  

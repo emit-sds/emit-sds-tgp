@@ -23,6 +23,7 @@ from copy import deepcopy
 import subprocess
 import matplotlib.pyplot as plt
 import datetime
+from quantification import compute_Q_and_uncertainty_utils
 
 
 class SerialEncoder(json.JSONEncoder):
@@ -131,13 +132,20 @@ def write_color_quicklook(indat, output_file):
     del dst_ds, outDataset
  
 
-def write_json(output_file, plume_dict, scene_names, indent=4):
+def write_delivery_json(output_file, plume_dict, scene_names, deliver_emissions, indent=4):
     outdict = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84" }, "type": "name"},"features":[],"name":"methane_metadata","type":"FeatureCollection" }
     outdict['features'].append(deepcopy(plume_dict))
+    authorized_keys = ['Plume ID', 'Orbit', 'DCID', 'DAAC Scene Names', 'UTC Time Observed', 
+                       'Max Plume Concentration (ppm m)', 'Latitude of max concentration', 'Longitude of max concentration', 'Wind Speed (m/s)', 
+                       'Wind Speed Std (m/s)', 'Wind Speed Source', 'Emissions Rate Estimate (kg/hr)', 'Emissions Rate Estimate Uncertainty (kg/hr)', 'Fetch Length (m)']
+
+    for key in list(outdict['features'][0]['properties'].keys()):
+        if key not in authorized_keys:
+            del outdict['features'][0]['properties'][key]
+    if not deliver_emissions:
+        outdict['features'][0]['properties'].update(compute_Q_and_uncertainty_utils.EMISSIONS_DELIVERY_INFO)
 
     outdict['features'][0]['properties']['DAAC Scene Names'] = scene_names
-    del outdict['features'][0]['properties']['style']
-    del outdict['features'][0]['properties']['Data Download']
 
     with open(output_file, 'w') as fout:
         fout.write(json.dumps(outdict, indent=indent, cls=SerialEncoder)) 
@@ -174,6 +182,19 @@ def write_geojson_linebyline(output_file, outdict):
         # Close features array and main object
         f.write('    ]\n')
         f.write('}')
+
+def write_external_geojson(input_file, output_file):
+    valid_keys = ['Plume ID', 'Scene FIDs', 'Orbit', 'DCID', 'DAAC Scene Names', 'Data Download', 'UTC Time Observed', 
+                  'Max Plume Concentration (ppm m)', 'Latitude of max concentration', 'Longitude of max concentration', 'style', 
+                  'Wind Speed (m/s)', 'Wind Speed Std (m/s)', 'Wind Speed Source', 'Emissions Rate Estimate (kg/hr)', 
+                  'Emissions Rate Estimate Uncertainty (kg/hr)', 'Fetch Length (m)']
+    outdict = json.load(open(input_file, 'r'))
+    for _f in range(len(outdict['features'])):
+        for key in list(outdict['features'][_f]['properties'].keys()):
+            if key not in valid_keys:
+                del outdict['features'][_f]['properties'][key]
+    write_geojson_linebyline(output_file, outdict)
+
 
 
 def global_metadata(data_version, software_version=None):
@@ -216,7 +237,7 @@ def get_metadata(plume_dict, global_metadata):
     scene_names = []
     for _s in range(len(plume_dict['properties']['Scene FIDs'])):
         fid =plume_dict['properties']['Scene FIDs'][_s]
-        scene =plume_dict['properties']['DAAC Scene Numbers'][_s]
+        scene =plume_dict['properties']['daac_scenes'][_s]
         orbit =plume_dict['properties']['Orbit']
         scene_names.append(f'EMIT_L2B_CH4ENH_{global_metadata["product_version"]}_{fid[4:12]}T{fid[13:19]}_{orbit}_{scene}')
 
@@ -225,7 +246,7 @@ def get_metadata(plume_dict, global_metadata):
             #'Estimated_Uncertainty_ppmm': plume_dict['properties']['Concentration Uncertainty (ppm m)'],
             'UTC_Time_Observed': plume_dict['properties']['UTC Time Observed'],
             #Source_Scenes - match full conventions 
-            'Source_Scenes': scene_names,
+            'DAAC Scene Names': scene_names,
             'Latitude of max concentration': plume_dict['properties']['Latitude of max concentration'],
             'Longitude of max concentration': plume_dict['properties']['Longitude of max concentration'],
             'Max Plume Concentration (ppm m)': plume_dict['properties']['Max Plume Concentration (ppm m)'],

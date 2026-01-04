@@ -90,7 +90,7 @@ def cli(
         plume_list=plume_list_arg,
     )
 
-def update_EMIT_plume_list_windspeeds(current_wind_speed_csv_filename, 
+def update_EMIT_plume_list_windspeeds(current_wind_speed_csv_filename = None, 
                                  plume_file = '/store/brodrick/methane/ch4_plumedir/previous_manual_annotation_oneback.json',
                                  write_rate = 10,
                                  plume_list = None):
@@ -142,7 +142,7 @@ def update_EMIT_plume_list_windspeeds(current_wind_speed_csv_filename,
     folder, name = os.path.split(current_wind_speed_csv_filename)
     num = int(os.path.splitext(name)[0].split('_')[-1])
     fname = '_'.join(os.path.splitext(name)[0].split('_')[:-1])
-    f = os.path.join(folder, f'{fname}_{num+1:04d}.csv')
+    output_csv_filename = os.path.join(folder, f'{fname}_{num+1:04d}.csv')
 
     results_list = []
     for i, new_plume in enumerate(new_plumes):
@@ -198,7 +198,69 @@ def update_EMIT_plume_list_windspeeds(current_wind_speed_csv_filename,
         df_combined = df_new
     else:
         df_combined = pd.concat([df_combined, df_new], ignore_index = True, sort = False)
-    df_combined.to_csv(f, index = False)
+    df_combined.to_csv(output_csv_filename, index = False)
+
+    return df_new
+
+def get_EMIT_plume_windspeeds(plume, input_wind_speed_csv_filename = None):
+    ''' Similar to update_EMIT_plume_list_windspeeds, but without the writing, and for single plumes
+    Parameters
+    ----------
+    plume: dict
+        A single plume feature dictionary from the EMIT plume geojson
+    input : string
+        Full path to a csv filename with /full/path/filename_0000.csv. See above comments for details
+
+    Returns
+    -------
+    dict - dictionary of windspeed results
+    bool - indication of whether the windspeed was newly computed (True) or read from input file (False)
+    '''
+    
+    logging.debug(f'Get windspeed for {plume["properties"]["Plume ID"]}')
+    if plume['properties']['Psuedo-Origin'] == '':
+        return None
+
+    if os.path.exists(input_wind_speed_csv_filename):
+        df_current = pd.read_csv(input_wind_speed_csv_filename)
+
+        match_idx = df_current['plume_id'] == plume['properties']['Plume ID']
+        if np.sum(match_idx) > 0:
+            return df_current[match_idx], False
+
+
+    lon, lat, _ = json.loads(plume['properties']['Psuedo-Origin'])['coordinates']
+    fids_str = '_'.join(plume['properties']['fids'])
+    fid = plume['properties']['fids'][0] # Just use the first one if there are two
+
+    if fid[:4].lower() == 'emit':
+        date = fid[4:8] + '-' + fid[8:10] + '-' + fid[10:12]
+        frac_time = float(fid[13:15]) + float(fid[15:17])/60 + float(fid[17:19])/3600
+    elif fid[:3].lower() == 'av3':
+        date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
+        frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
+    elif fid[:3].lower() == 'ang':
+        date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
+        frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
+    else:
+        raise ValueError(f'Instrument type unrecognized from FID: {fid}')
+
+    with tempfile.TemporaryDirectory() as hrrr_products:
+        r_HRRR, r_ERA5 = get_w10_reanalysis(lat, lon, date, frac_time, hrrr_products)
+
+    d = {'plume_id': plume['properties']['Plume ID'],
+         'FID': fids_str}
+
+    HRRR_names = ['w10_hrrr_m_per_s', 'w10_dir_hrrr_deg_N_from_E', 'w10_avg_hrrr_m_per_s', 'w10_std_hrrr_m_per_s', 'n_valid_u10_hrrr', 'n_valid_v10_hrrr', 't2m_hrrr_K', 'surface_pressure_hrrr_Pa']
+    [d.update({key:item}) for key, item in zip(HRRR_names, r_HRRR)]
+
+    era5_names = ['w10_era5_m_per_s', 'w10_dir_era5_deg_N_from_E', 'w10_avg_era5_m_per_s', 'w10_std_era5_m_per_s', 'n_valid_u10_era5', 'n_valid_v10_era5', 't2_era5_K', 'surface_pressure_era5_Pa']
+    [d.update({key:item}) for key, item in zip(era5_names, r_ERA5)]
+
+    d = pd.DataFrame([d])
+
+    return d, True
+
 
 def get_w10_reanalysis(plume_lat, plume_lon, date, frac_time, save_path): 
     """

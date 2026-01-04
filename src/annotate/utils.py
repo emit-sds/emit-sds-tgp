@@ -122,8 +122,15 @@ def build_plume_properties(plume_input_properties, plume_geometry, plume_data, t
     props['Scene FIDs'] = loc_pp['fids']
     props['Orbit'] = loc_pp['orbit']
     props['DCID'] = loc_pp['dcid']
-    props['DAAC Scene Numbers'] = loc_pp['daac_scenes']
+    props['daac_scenes'] = loc_pp['daac_scenes']
     props["Data Download"] = get_daac_link(props, data_version)
+
+    props['Sector'] = loc_pp['Sector']
+    props['Sector Confidence'] = loc_pp['Sector Confidence']
+    props['Delineation Mode'] = loc_pp['Delineation Mode']
+    props['Psuedo-Origin'] = loc_pp['Psuedo-Origin']
+    props['Simple IME Valid'] = loc_pp['Simple IME Valid']
+    props['Time Created'] = loc_pp['Time Created']
 
 
     inplume_dat = plume_data[plume_data != nodata_value]
