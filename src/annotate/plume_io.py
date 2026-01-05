@@ -23,6 +23,7 @@ from copy import deepcopy
 import subprocess
 import matplotlib.pyplot as plt
 import datetime
+from quantification import compute_Q_and_uncertainty_utils
 
 
 class SerialEncoder(json.JSONEncoder):
@@ -131,13 +132,20 @@ def write_color_quicklook(indat, output_file):
     del dst_ds, outDataset
  
 
-def write_json(output_file, plume_dict, scene_names, indent=4):
+def write_delivery_json(output_file, plume_dict, scene_names, deliver_emissions, indent=4):
     outdict = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84" }, "type": "name"},"features":[],"name":"methane_metadata","type":"FeatureCollection" }
     outdict['features'].append(deepcopy(plume_dict))
+    authorized_keys = ['Plume ID', 'Orbit', 'DCID', 'DAAC Scene Names', 'UTC Time Observed', 
+                       'Max Plume Concentration (ppm m)', 'Latitude of max concentration', 'Longitude of max concentration', 'Wind Speed (m/s)', 
+                       'Wind Speed Std (m/s)', 'Wind Speed Source', 'Emissions Rate Estimate (kg/hr)', 'Emissions Rate Estimate Uncertainty (kg/hr)', 'Fetch Length (m)']
+
+    for key in list(outdict['features'][0]['properties'].keys()):
+        if key not in authorized_keys:
+            del outdict['features'][0]['properties'][key]
+    if not deliver_emissions:
+        outdict['features'][0]['properties'].update(compute_Q_and_uncertainty_utils.EMISSIONS_DELIVERY_INFO)
 
     outdict['features'][0]['properties']['DAAC Scene Names'] = scene_names
-    del outdict['features'][0]['properties']['style']
-    del outdict['features'][0]['properties']['Data Download']
 
     with open(output_file, 'w') as fout:
         fout.write(json.dumps(outdict, indent=indent, cls=SerialEncoder)) 
@@ -174,6 +182,48 @@ def write_geojson_linebyline(output_file, outdict):
         # Close features array and main object
         f.write('    ]\n')
         f.write('}')
+
+def write_external_geojson(input_file, output_file):
+    valid_keys = ['Plume ID', 'Scene FIDs', 'Orbit', 'DCID', 'DAAC Scene Names', 'Data Download', 'UTC Time Observed', 
+                  'Max Plume Concentration (ppm m)', 'Latitude of max concentration', 'Longitude of max concentration', 'style', 
+                  'Wind Speed (m/s)', 'Wind Speed Std (m/s)', 'Wind Speed Source', 'Emissions Rate Estimate (kg/hr)', 
+                  'Emissions Rate Estimate Uncertainty (kg/hr)', 'Fetch Length (m)', 'plume_complex_count']
+    outdict = json.load(open(input_file, 'r'))
+
+    # Remove unapproved plumes
+    for _f in range(len(outdict['features'])-1,-1,-1):
+        if outdict['features'][_f]['properties']['Review Status'] != 'Approved':
+            del outdict['features'][_f]
+
+    # Remove plumes that have an NA for Simple IME Valid
+    for _f in range(len(outdict['features'])-1,-1,-1):
+        if outdict['features'][_f]['properties']['Simple IME Valid'] not in ['Yes','No']:
+            del outdict['features'][_f]
+
+    # If Simple IME Valid is No, scrub emissions info
+    for _f in range(len(outdict['features'])):
+        if outdict['features'][_f]['properties']['Simple IME Valid'] == 'No':
+            outdict['features'][_f]['properties'].update(compute_Q_and_uncertainty_utils.EMISSIONS_DELIVERY_INFO)
+
+    # Remove non-public keys
+    for _f in range(len(outdict['features'])):
+        for key in list(outdict['features'][_f]['properties'].keys()):
+            if key not in valid_keys:
+                del outdict['features'][_f]['properties'][key]
+        
+    outcount_point = 1
+    outcount_poly = 1
+    for _f in range(len(outdict['features'])):
+        # Add plume count
+        if outdict['features'][_f]['geometry']['type'] == 'Point':
+            outdict['features'][_f]['properties']['plume_complex_count'] = outcount_point
+            outcount_point += 1
+        else:
+            outdict['features'][_f]['properties']['plume_complex_count'] = outcount_poly
+            outcount_poly += 1
+
+    write_geojson_linebyline(output_file, outdict)
+
 
 
 def global_metadata(data_version, software_version=None):
@@ -216,7 +266,7 @@ def get_metadata(plume_dict, global_metadata):
     scene_names = []
     for _s in range(len(plume_dict['properties']['Scene FIDs'])):
         fid =plume_dict['properties']['Scene FIDs'][_s]
-        scene =plume_dict['properties']['DAAC Scene Numbers'][_s]
+        scene =plume_dict['properties']['daac_scenes'][_s]
         orbit =plume_dict['properties']['Orbit']
         scene_names.append(f'EMIT_L2B_CH4ENH_{global_metadata["product_version"]}_{fid[4:12]}T{fid[13:19]}_{orbit}_{scene}')
 
@@ -225,7 +275,7 @@ def get_metadata(plume_dict, global_metadata):
             #'Estimated_Uncertainty_ppmm': plume_dict['properties']['Concentration Uncertainty (ppm m)'],
             'UTC_Time_Observed': plume_dict['properties']['UTC Time Observed'],
             #Source_Scenes - match full conventions 
-            'Source_Scenes': scene_names,
+            'DAAC Scene Names': scene_names,
             'Latitude of max concentration': plume_dict['properties']['Latitude of max concentration'],
             'Longitude of max concentration': plume_dict['properties']['Longitude of max concentration'],
             'Max Plume Concentration (ppm m)': plume_dict['properties']['Max Plume Concentration (ppm m)'],
@@ -272,3 +322,27 @@ def trim_plume(plume_mask_in, trans, badmask=None, nodata_value=0, buffer=0):
     outtrans[3] += min_y * trans[5]
     return trimmed_mask, outtrans
 
+def get_window(rawspace_coords, trans, ds_size, buffer_px):
+
+    xs = [x[0] for x in rawspace_coords]
+    ys = [x[1] for x in rawspace_coords]
+    min_x = max(0, int(np.min(xs)) - buffer_px)
+    max_x = min(ds_size[1] - 1, int(np.max(xs)) + buffer_px)
+    min_y = max(0, int(np.min(ys)) - buffer_px)
+    max_y = min(ds_size[0] - 1, int(np.max(ys)) + buffer_px)
+    
+    win_w = max_x - min_x
+    win_h = max_y - min_y
+    
+    if win_w <= 0 or win_h <= 0:
+        return None, None, None
+    
+    # Window transform
+    window_trans = list(trans)
+    window_trans[0] += min_x * trans[1]
+    window_trans[3] += min_y * trans[5]
+
+    # Local coords for mask
+    local_coords = [[x[0] - min_x, x[1] - min_y] for x in rawspace_coords]
+
+    return (min_x, min_y, win_w, win_h), window_trans, local_coords

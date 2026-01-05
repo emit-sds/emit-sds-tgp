@@ -122,8 +122,15 @@ def build_plume_properties(plume_input_properties, plume_geometry, plume_data, t
     props['Scene FIDs'] = loc_pp['fids']
     props['Orbit'] = loc_pp['orbit']
     props['DCID'] = loc_pp['dcid']
-    props['DAAC Scene Numbers'] = loc_pp['daac_scenes']
+    props['daac_scenes'] = loc_pp['daac_scenes']
     props["Data Download"] = get_daac_link(props, data_version)
+
+    props['Sector'] = loc_pp['Sector']
+    props['Sector Confidence'] = loc_pp['Sector Confidence']
+    props['Delineation Mode'] = loc_pp['Delineation Mode']
+    props['Psuedo-Origin'] = loc_pp['Psuedo-Origin']
+    props['Simple IME Valid'] = loc_pp['Simple IME Valid']
+    props['Time Created'] = loc_pp['Time Created']
 
 
     inplume_dat = plume_data[plume_data != nodata_value]
@@ -171,19 +178,24 @@ def build_plume_properties(plume_input_properties, plume_geometry, plume_data, t
     # For R1 Review
     if not loc_pp['R1 - Reviewed']:
         props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "red", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+        review_status = 'R1 Pending'  
     
     # For R2 Review
     if loc_pp['R1 - Reviewed'] and loc_pp['R1 - VISIONS'] and not loc_pp['R2 - Reviewed']:
         props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "green", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+        review_status = 'R1 Approved, R2 Pending'  
 
     # Accept
     if loc_pp['R1 - Reviewed'] and loc_pp['R1 - VISIONS'] and loc_pp['R2 - Reviewed'] and loc_pp['R2 - VISIONS']:
         props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "white", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+        review_status = 'Approved'  
     
     # Reject
     if (loc_pp['R1 - Reviewed'] and not loc_pp['R1 - VISIONS']) or (loc_pp['R2 - Reviewed'] and not loc_pp['R2 - VISIONS']):
         props['style'] = {"maxZoom": 20, "minZoom": 0, "color": "yellow", 'opacity': 1, 'weight': 2, 'fillOpacity': 0}
+        review_status = 'Rejected'  
 
+    props['Review Status'] = review_status
     poly_res = {"geometry": loc_pp['geometry'],
                "type": "Feature",
                "properties": props}

@@ -23,8 +23,18 @@ import json
 import os
 import pandas as pd
 from typing import List
+from copy import deepcopy
 
 from quantification import compute_flux, windspeed
+
+EMISSIONS_DELIVERY_INFO = {
+                    'Wind Speed (m/s)': 'NA',
+                    'Wind Speed Std (m/s)': 'NA',
+                    'Wind Speed Source': 'NA',
+                    'Emissions Rate Estimate (kg/hr)': 'NA',
+                    'Emissions Rate Estimate Uncertainty (kg/hr)': 'NA',
+                    'Fetch Length (m)': 'NA',
+                }
 
 def compute_Q_and_uncertainty(C_Q, sumC2, windspeed_m_s, windspeed_std_m_s, fetch_m, fetch_unc_fraction):
     """
@@ -92,9 +102,10 @@ def single_plume_emissions(feat: dict,
                            delivery_raster_file: str, 
                            delivery_sens_file: str,
                            delivery_uncert_file: str,
-                           working_windspeed_csv: str,
                            annotation_file: str,
-                           overrule_simple_ime_flag: bool = False):
+                           overrule_simple_ime_flag: bool = False,
+                           working_windspeed_csv: str = None,
+                           ):
     """
     Compute emissions and uncertainties for a single plume.
     Inputs:
@@ -112,28 +123,22 @@ def single_plume_emissions(feat: dict,
         Path to the delivery sensitivity file, (populated, read only).
     delivery_uncert_file: str
         Path to the delivery uncertainty file (populated, read only).
-    working_windspeed_csv: str
-        Path to the working windspeed CSV file (populated, read only).
     annotation_file: str
         Path to the annotation file (populated, read only).
     overrule_simple_ime_flag: bool
         If true, ignore "Simple IME Valid" and calc emissions anyway.
+    working_windspeed_csv: str
+        Path to the working windspeed CSV file (populated, read only).
     
 
     Returns:
     emissions_info: dict
         Dictionary containing computed emissions and uncertainties.
+    windspeed_info: dict
+        Dictionary containing windspeed information.
     """
-    emissions_info = {
-                    'Wind Speed (m/s)': 'NA',
-                    'Wind Speed Std (m/s)': 'NA',
-                    'Wind Speed Source': 'NA',
-                    'Emissions Rate Estimate (kg/hr)': 'NA',
-                    'Emissions Rate Estimate Uncertainty (kg/hr)': 'NA',
-                    'Fetch Length (m)': 'NA',
-                }
+    emissions_info = deepcopy(EMISSIONS_DELIVERY_INFO)
     if feat['properties']['Simple IME Valid'] == 'Yes' or overrule_simple_ime_flag:
-
         class flux_args:
             def __init__(self):
                 self.minppmm = 500
@@ -181,7 +186,7 @@ def single_plume_emissions(feat: dict,
         lfa = flux_args()
         if lfa.lat is None or lfa.lng is None:
             logging.warning(f'Plume {lfa.fid} missing Psuedo-Origin, skipping plume')
-            return emissions_info, False
+            return emissions_info, None
 
         with open(os.path.join(proc_dir, f'flux_args_{poly_plume["properties"]["Plume ID"]}.json'),'wb') as pf:
             pf.write(json.dumps(lfa.__dict__, indent=2).encode('utf-8'))
@@ -192,26 +197,24 @@ def single_plume_emissions(feat: dict,
         flux_status, flux_res = compute_flux.compute_flux(lfa)
         if flux_status != 'success':
             logging.warning(f'Flux calculation failed for plume {lfa.fid} with status {flux_status}, skipping plume')
-            return emissions_info, False
+            return emissions_info, None
 
         logging.debug(f'Flux results: {flux_status} {flux_res}')
         # Compute Windspeed
         original_log_level = logging.getLogger().level
+
         logging.getLogger().setLevel(logging.ERROR)
-        windspeed.update_EMIT_plume_list_windspeeds(working_windspeed_csv,
-                                                    plume_file=annotation_file,
-                                                    write_rate=1,
-                                                    plume_list=[poly_plume['properties']['Plume ID']]
-                                                    )
+        dfw, dfw_new = windspeed.get_EMIT_plume_windspeeds(feat, working_windspeed_csv)
         logging.getLogger().setLevel(original_log_level)
+
         wsk = windspeed.windspeed_key_names('hrrr', 'era5', 'w10', 'm_per_s')
-
-        dfw = pd.read_csv(working_windspeed_csv)
-        dfw = dfw[dfw['plume_id'] == poly_plume['properties']['Plume ID']]
-
         ws = dfw[wsk['primary']].fillna(dfw[wsk['secondary']])
         ws_std = dfw[wsk['primary_std']].fillna(dfw[wsk['secondary_std']])
         ws_source = np.where(dfw[wsk['primary']].notna(), 'hrrr', 'era5')
+
+        dfw = dfw.to_dict(orient='records')[0] 
+        if dfw_new is False: # only return to concatenate if new
+            dfw = None
 
         # Compute Emissions
         Q, sigma_Q, sigma_C, sigma_w, sigma_f = \
@@ -227,9 +230,25 @@ def single_plume_emissions(feat: dict,
         emissions_info['Wind Speed Source'] = ws_source[0].upper()
         emissions_info['Emissions Rate Estimate (kg/hr)'] = float(np.round(Q.values[0],4))
         emissions_info['Emissions Rate Estimate Uncertainty (kg/hr)'] = float(np.round(sigma_Q.values[0],4))
-
         emissions_info['Fetch Length (m)'] = float(np.round(flux_res[5],4))
+
+        for key in emissions_info.keys():
+            try:
+                if np.isnan(emissions_info[key]):
+                    emissions_info[key] = 'NA'
+            except TypeError:
+                pass
+
+
+        if dfw is not None:
+            for key in dfw.keys():
+                try:
+                    if pd.isna(dfw[key]):
+                        dfw[key] = 'NA'
+                except TypeError:
+                    pass
+
         logging.info(f'Populated emissions info: {emissions_info}')
-        return emissions_info, True
+        return emissions_info, dfw
     
-    return emissions_info, False
+    return emissions_info, None

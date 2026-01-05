@@ -22,7 +22,7 @@ python compute_flux.py --windms 3 --minppmm 500 --mergedistm 0 \
 
 Todo:
 - handle distribution skew due to stats excluding nodata pixels:
-  e.g., ime = sum(cmf[mask]) = sum(mask)*mean(cmf[mask]) 
+  e2.g., ime = sum(cmf[mask]) = sum(mask)*mean(cmf[mask]) 
   UNLESS mask contains nodata pixels, then
   sum(mask) > sum(mask & ~nodata)
   and
@@ -1063,7 +1063,7 @@ def compute_flux(args):
         pl.tight_layout()
         pl.subplots_adjust(top=0.975,hspace=0.15,wspace=0.05,left=0.05)
         pl.savefig(swpfigf)
-        pl.close(fig)
+        pl.close()
     return 'success', returns
 
 def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_ij, imin, imax, jmin, jmax, imefigf, imefigf_zoom, ps):
@@ -1145,7 +1145,7 @@ def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_i
     pl.savefig(imefigf)
 
     pl.savefig(imefigf_zoom)
-    pl.close(fig)
+    pl.close()
 
 if __name__ == '__main__':
     import argparse
