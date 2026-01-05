@@ -246,8 +246,6 @@ def main(input_args=None):
             utils.print_and_call(f'rclone copy  {fn.output_json_internal} redhat:/data/emit/mmgis/coverage/')
             utils.print_and_call(f'rclone copy  {fn.output_json_external} redhat:/data/emit/mmgis/coverage/')
 
-        #print_and_call(f'rsync -a --info=progress2 {tile_dir}/{od_date}/ brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/mosaics/{args.type}_plume_tiles_working/{od_date}/ --delete')
-        #print_and_call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/converted_manual_{args.type}_plumes.json')
         
 
 
@@ -264,7 +262,7 @@ class Filenames:
         self.delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
         self.quant_dir = os.path.join(args.out_dir, 'quantification') # Quantification working directory
         self.proc_dir = os.path.join(args.out_dir, 'processing') # Processing working directory
-        self.working_windspeed_csv = os.path.join(args.out_dir, 'working_windspeed_estimates_0000.csv') # Quantification windspeed working file
+        self.working_windspeed_csv = os.path.join(args.out_dir, 'working_windspeed_estimates.csv') # Quantification windspeed working file
 
         if create:
             os.makedirs(self.delivery_dir, exist_ok=True)

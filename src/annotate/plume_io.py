@@ -200,6 +200,12 @@ def write_external_geojson(input_file, output_file):
         if outdict['features'][_f]['properties']['Simple IME Valid'] not in ['Yes','No']:
             del outdict['features'][_f]
 
+    # If Simple IME Valid is No, scrub emissions info
+    for _f in range(len(outdict['features'])):
+        if outdict['features'][_f]['properties']['Simple IME Valid'] == 'No':
+            outdict['features'][_f]['properties'].update(compute_Q_and_uncertainty_utils.EMISSIONS_DELIVERY_INFO)
+
+    # Remove non-public keys
     for _f in range(len(outdict['features'])):
         for key in list(outdict['features'][_f]['properties'].keys()):
             if key not in valid_keys:
@@ -207,7 +213,6 @@ def write_external_geojson(input_file, output_file):
         
     outcount_point = 1
     outcount_poly = 1
-    # Remove non-public keys
     for _f in range(len(outdict['features'])):
         # Add plume count
         if outdict['features'][_f]['geometry']['type'] == 'Point':
