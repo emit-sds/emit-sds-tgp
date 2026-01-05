@@ -73,6 +73,7 @@ def main(input_args=None):
     parser.add_argument('--write_dcid_tifs', action='store_true', help='write out dcid level tifs for debugging')
     parser.add_argument('--n_cores', type=int, default=1, help='number of CPUs to use')
     parser.add_argument('--num_dcids', type=int, default=-1, help='number of DCIDs to process, -1 for all')
+    parser.add_argument('--sync_results', action='store_true', help='sync results to remove server')
     args = parser.parse_args(input_args)
 
     logging.basicConfig(format='%(levelname)s:%(asctime)s ||| %(message)s', level=args.loglevel,
@@ -90,6 +91,9 @@ def main(input_args=None):
 
     # Global File names
     fn = Filenames(args, create=True)
+    fn.coverage_size = os.path.getsize(args.track_coverage_file)
+    fn.annotation_size = None
+    coverage = None
 
 
     # Loop only serves to rerun same instances over and over
@@ -98,23 +102,37 @@ def main(input_args=None):
         ######## Step 1 ###########
 
         # Update annotations file load
-        utils.print_and_call(f'curl "https://popo.jpl.nasa.gov/mmgis/API/files/getfile" -H "Authorization:Bearer {args.key}" --data-raw "id={args.id}" > {fn.annotation_file_raw}')
+        utils.print_and_call(f'curl "https://popo.jpl.nasa.gov/mmgis/API/files/getfile" -H "Authorization:Bearer {args.key}" --data-raw "id={args.id}" > {fn.annotation_file_raw} 2>/dev/null')
+        
+        if fn.annotation_size is not None and os.path.getsize(fn.annotation_file_raw) == fn.annotation_size:
+            time.sleep(10)
+            continue
+        fn.annotation_size = os.path.getsize(fn.annotation_file_raw)
+
         manual_annotations = json.load(open(fn.annotation_file_raw,'r'))['body']['geojson']
         for _feat in range(len(manual_annotations['features'])):
             manual_annotations['features'][_feat]['properties']['Plume ID'] = manual_annotations['features'][_feat]['properties'].pop('name')
+
         manual_annotations_previous = None
         if os.path.isfile(fn.previous_annotation_file):
             manual_annotations_previous = json.load(open(fn.previous_annotation_file,'r'))
-
-
-        # Reload coverage file load
-        coverage = json.load(open(args.track_coverage_file,'r'))
 
         logging.debug('Load pre-existing public-facing outputs (combined)')
         outdict = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84" }, "type": "name"},"features":[],"name":"methane_metadata","type":"FeatureCollection" }
         if os.path.isfile(fn.output_json_internal):
             outdict = json.load(open(fn.output_json_internal,'r'))
 
+        # If a plume didn't make it into the _internal.json, then it wasn't processed yet - remove it from the previous annotations to ensure rerun
+        if len(outdict['features']) > 0 and manual_annotations_previous is not None:
+            processed_plume_ids = pd.json_normalize(outdict['features'])['properties.Plume ID'].tolist()
+            manual_annotations_previous['features'] = [feat for feat in manual_annotations_previous['features'] if feat['properties']['Plume ID'] in processed_plume_ids]
+
+        # Reload coverage file if needed
+        if coverage is None or os.path.getsize(args.track_coverage_file) != fn.coverage_size:
+            fn.coverage_size = os.path.getsize(args.track_coverage_file)
+            coverage = json.load(open(args.track_coverage_file,'r'))
+
+      
         logging.info(f'Total plumes: {len(manual_annotations["features"])}')
         logging.debug('Run Spatial-Temporal Intersection to find FIDs')
         manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, manual_annotations_previous)
@@ -224,6 +242,10 @@ def main(input_args=None):
         ws_df.to_csv(fn.working_windspeed_csv, index=False)
 
         # Sync
+        if args.sync_results:
+            utils.print_and_call(f'rclone copy  {fn.output_json_internal} redhat:/data/emit/mmgis/coverage/')
+            utils.print_and_call(f'rclone copy  {fn.output_json_external} redhat:/data/emit/mmgis/coverage/')
+
         #print_and_call(f'rsync -a --info=progress2 {tile_dir}/{od_date}/ brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/mosaics/{args.type}_plume_tiles_working/{od_date}/ --delete')
         #print_and_call(f'rsync {output_json} brodrick@$EMIT_SCIENCE_IP:/data/emit/mmgis/coverage/converted_manual_{args.type}_plumes.json')
         

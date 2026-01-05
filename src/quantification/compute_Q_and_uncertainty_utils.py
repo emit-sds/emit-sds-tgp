@@ -230,8 +230,24 @@ def single_plume_emissions(feat: dict,
         emissions_info['Wind Speed Source'] = ws_source[0].upper()
         emissions_info['Emissions Rate Estimate (kg/hr)'] = float(np.round(Q.values[0],4))
         emissions_info['Emissions Rate Estimate Uncertainty (kg/hr)'] = float(np.round(sigma_Q.values[0],4))
-
         emissions_info['Fetch Length (m)'] = float(np.round(flux_res[5],4))
+
+        for key in emissions_info.keys():
+            try:
+                if np.isnan(emissions_info[key]):
+                    emissions_info[key] = 'NA'
+            except TypeError:
+                pass
+
+
+        if dfw is not None:
+            for key in dfw.keys():
+                try:
+                    if pd.isna(dfw[key]):
+                        dfw[key] = 'NA'
+                except TypeError:
+                    pass
+
         logging.info(f'Populated emissions info: {emissions_info}')
         return emissions_info, dfw
     

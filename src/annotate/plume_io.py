@@ -187,12 +187,26 @@ def write_external_geojson(input_file, output_file):
     valid_keys = ['Plume ID', 'Scene FIDs', 'Orbit', 'DCID', 'DAAC Scene Names', 'Data Download', 'UTC Time Observed', 
                   'Max Plume Concentration (ppm m)', 'Latitude of max concentration', 'Longitude of max concentration', 'style', 
                   'Wind Speed (m/s)', 'Wind Speed Std (m/s)', 'Wind Speed Source', 'Emissions Rate Estimate (kg/hr)', 
-                  'Emissions Rate Estimate Uncertainty (kg/hr)', 'Fetch Length (m)']
+                  'Emissions Rate Estimate Uncertainty (kg/hr)', 'Fetch Length (m)', 'plume_complex_count']
     outdict = json.load(open(input_file, 'r'))
+
+    # Remove unapproved plumes
+    for _f in range(len(outdict['features'])-1,-1,-1):
+        if outdict['features'][_f]['properties']['Review Status'] != 'Approved':
+            del outdict['features'][_f]
+
+
+    outcount = 1
+    # Remove non-public keys
     for _f in range(len(outdict['features'])):
         for key in list(outdict['features'][_f]['properties'].keys()):
             if key not in valid_keys:
                 del outdict['features'][_f]['properties'][key]
+        
+        # Add plume count
+        outdict['features'][_f]['properties']['plume_complex_count'] = outcount
+        outcount += 1
+
     write_geojson_linebyline(output_file, outdict)
 
 
