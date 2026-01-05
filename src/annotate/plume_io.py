@@ -195,17 +195,27 @@ def write_external_geojson(input_file, output_file):
         if outdict['features'][_f]['properties']['Review Status'] != 'Approved':
             del outdict['features'][_f]
 
+    # Remove plumes that have an NA for Simple IME Valid
+    for _f in range(len(outdict['features'])-1,-1,-1):
+        if outdict['features'][_f]['properties']['Simple IME Valid'] not in ['Yes','No']:
+            del outdict['features'][_f]
 
-    outcount = 1
-    # Remove non-public keys
     for _f in range(len(outdict['features'])):
         for key in list(outdict['features'][_f]['properties'].keys()):
             if key not in valid_keys:
                 del outdict['features'][_f]['properties'][key]
         
+    outcount_point = 1
+    outcount_poly = 1
+    # Remove non-public keys
+    for _f in range(len(outdict['features'])):
         # Add plume count
-        outdict['features'][_f]['properties']['plume_complex_count'] = outcount
-        outcount += 1
+        if outdict['features'][_f]['geometry']['type'] == 'Point':
+            outdict['features'][_f]['properties']['plume_complex_count'] = outcount_point
+            outcount_point += 1
+        else:
+            outdict['features'][_f]['properties']['plume_complex_count'] = outcount_poly
+            outcount_poly += 1
 
     write_geojson_linebyline(output_file, outdict)
 
