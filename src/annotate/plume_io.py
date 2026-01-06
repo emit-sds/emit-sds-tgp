@@ -39,7 +39,7 @@ class SerialEncoder(json.JSONEncoder):
             return super(SerialEncoder, self).default(obj)
 
 
-def write_cog(output_file, data, source_trans, source_proj, metadata=None, nodata_value=-9999):
+def write_cog(output_file, data, source_trans, source_proj, metadata=None, nodata_value=-9999, mask=None):
     """
     Writes a Cloud Optimized GeoTIFF (COG) file.
 
@@ -49,10 +49,17 @@ def write_cog(output_file, data, source_trans, source_proj, metadata=None, nodat
         inds: (gdal dataset) GDAL dataset with metadata.
         metadata (dict, optional): Metadata to be added to the output file. Defaults to None.
         nodata_value (, optional): The nodata value to use. Defaults to -9999.
+        mask (numpy.ndarray, optional): A mask array where True indicates valid data. Defaults to None.
     """
     driver = gdal.GetDriverByName('MEM')
 
-    od = data
+    od = data.copy()
+    if od.ndim == 2:
+        od = od.reshape((od.shape[0], od.shape[1], 1))
+
+    if mask is not None:
+        od[np.logical_not(mask)] = nodata_value
+
     numpy_to_gdal = {
         np.dtype(np.float64): 7,
         np.dtype(np.float32): 6,
@@ -109,8 +116,10 @@ def write_color_plume(rawdat, plumes_mask, glt_ds, outname: str, style = 'ch4'):
     write_cog(outname, colorized, glt_ds, nodata_value=0)
 
 
-def write_color_quicklook(indat, output_file):
+def write_color_quicklook(indat, output_file, inmask=None):
     dat = indat.copy()
+    if inmask is not None:
+        dat[np.logical_not(inmask)] = -9999
     mask = dat != -9999
     dat[dat < 0] = 0
     dat = dat /1500.
@@ -244,7 +253,7 @@ def global_metadata(data_version, software_version=None):
     extra_metadata['platform'] = "ISS"
     extra_metadata['Conventions'] = "CF-1.63"
     extra_metadata['institution'] = "NASA Jet Propulsion Laboratory/California Institute of Technology"
-    extra_metadata['license'] = "https://science.nasa.gov/earth-science/earth-science-data/data-information-policy/"
+    extra_metadata['license'] = "https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance"
     extra_metadata['naming_authority'] = "LPDAAC"
     extra_metadata['date_created'] = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
     extra_metadata['keywords_vocabulary'] = "NASA Global Change Master Directory (GCMD) Science Keywords"
@@ -257,7 +266,6 @@ def global_metadata(data_version, software_version=None):
     extra_metadata['publisher_url'] = "https://lpdaac.usgs.gov"
     extra_metadata['publisher_email'] = "lpdaac@usgs.gov"
     extra_metadata['identifier_product_doi_authority'] = "https://doi.org"
-    extra_metadata['title'] = "EMIT"
     extra_metadata['Units']= 'ppm m'
     return extra_metadata
 
