@@ -69,10 +69,11 @@ def main(input_args=None):
     parser.add_argument('--logfile', type=str, default=None, help='output file to write log to')    
     parser.add_argument('--continuous', action='store_true', help='run continuously')    
     parser.add_argument('--track_coverage_file', default='/store/brodrick/emit/emit-visuals/track_coverage_pub.json')
-    parser.add_argument('--plume_buffer_px', type=int, default=30, help='number of pixels to buffer plume cutouts by')
+    parser.add_argument('--plume_buffer_px', type=int, default=100, help='number of pixels to buffer plume cutouts by')
     parser.add_argument('--write_dcid_tifs', action='store_true', help='write out dcid level tifs for debugging')
     parser.add_argument('--n_cores', type=int, default=1, help='number of CPUs to use')
     parser.add_argument('--num_dcids', type=int, default=-1, help='number of DCIDs to process, -1 for all')
+    parser.add_argument('--specific_pid', type=str, default=None, help='Run this and only this plume ID (for debugging)')
     parser.add_argument('--sync_results', action='store_true', help='sync results to remove server')
     args = parser.parse_args(input_args)
 
@@ -135,7 +136,14 @@ def main(input_args=None):
       
         logging.info(f'Total plumes: {len(manual_annotations["features"])}')
         logging.debug('Run Spatial-Temporal Intersection to find FIDs')
-        manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, manual_annotations_previous)
+        if args.specific_pid is None:
+            manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, manual_annotations_previous)
+        else:
+            # This is a special case primarily for development
+            logging.info(f'Filtering to only {args.specific_pid}')
+            manual_annotations['features'] = [feat for feat in manual_annotations['features'] if feat['properties']['Plume ID'] == args.specific_pid]
+            manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, None)
+
         logging.info(f'New plumes, post fid filter: {len(new_plumes)}')
         manual_annotations_df = pd.json_normalize(manual_annotations['features'])
         most_recent_plume_create = pd.to_datetime(manual_annotations_df['properties.Time Created']).max()
