@@ -31,7 +31,7 @@ Removing the need for the background calcluation eliminates this step, and it ha
 
 
 import argparse
-import os
+import os, filecmp
 import numpy as np
 import json
 import time
@@ -249,11 +249,14 @@ def main(input_args=None):
         ws_df.drop_duplicates(subset=['plume_id'], keep='last', inplace=True)
         ws_df.to_csv(fn.working_windspeed_csv, index=False)
 
+        fn.daac_sync()
+
         # Sync
         if args.sync_results:
             utils.print_and_call(f'rclone copy  {fn.output_json_internal} redhat:/data/emit/mmgis/coverage/')
             utils.print_and_call(f'rclone copy  {fn.output_json_external} redhat:/data/emit/mmgis/coverage/')
 
+    fn.daac_sync()
         
 
 
@@ -267,6 +270,7 @@ class Filenames:
         # Output / intput jsons are identical, internal just includes additional information
         self.output_json_external = os.path.join(args.out_dir, 'combined_plume_metadata_external.json') # Output (public facing) metadata file
         self.output_json_internal = os.path.join(args.out_dir, 'combined_plume_metadata_internal.json') # Output (internal facing) metadata file
+        self.daac_dir = os.path.join(args.out_dir, 'daac') # Ready for DAAC sync
         self.delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
         self.quant_dir = os.path.join(args.out_dir, 'quantification') # Quantification working directory
         self.proc_dir = os.path.join(args.out_dir, 'processing') # Processing working directory
@@ -276,6 +280,7 @@ class Filenames:
             os.makedirs(self.delivery_dir, exist_ok=True)
             os.makedirs(self.quant_dir, exist_ok=True)
             os.makedirs(self.proc_dir, exist_ok=True)
+            os.makedirs(self.daac_dir, exist_ok=True)
         
     @staticmethod
     def plume_delivery_basename(outdir, feat):
@@ -301,10 +306,13 @@ class Filenames:
 
         return raster_file, unc_file, sns_file
     
-    def delivery_filenames(self, poly_plume, gtype):
-        delivery_base = self.plume_delivery_basename(self.delivery_dir, poly_plume)
-        os.makedirs(os.path.dirname(delivery_base), exist_ok=True)
+    def delivery_filenames(self, poly_plume, gtype, daac_version=False):
+        if daac_version:
+            delivery_base = self.plume_delivery_basename(self.daac_dir, poly_plume)
+        else:
+            delivery_base = self.plume_delivery_basename(self.delivery_dir, poly_plume)
 
+        os.makedirs(os.path.dirname(delivery_base), exist_ok=True)
         delivery_raster_file = os.path.join(delivery_base + '.tif')
         delivery_ql_file = os.path.join(delivery_base + '.png')
         delivery_json_file = os.path.join(delivery_base + '.json')
@@ -327,6 +335,31 @@ class Filenames:
                 'type': 'document'
             }]
         return img_dicts
+
+    def daac_sync(self):
+
+        output_plumes = [x for x in json.load(open(self.output_json_external, 'r'))['features'] if x['geometry']['type'] == 'Polygon']
+        for plume in output_plumes:
+            delivery_raster, delivery_ql, delivery_json, delivery_uncert, delivery_sens = self.delivery_filenames(plume, 'point', daac_version=False)
+            daac_raster, daac_ql, daac_json, daac_uncert, daac_sens = self.delivery_filenames(plume, 'point', daac_version=True)
+            for de, da in zip([delivery_raster, delivery_ql, delivery_json],
+                               [daac_raster, daac_ql, daac_json]):
+
+                if os.path.isfile(da):
+                    # If it's there and the same, skip safely
+                    if filecmp.cmp(de, da, shallow=False):
+                        continue
+                    else:
+                        # If it's there and different, raise the alarm
+                        logging.warning(f'DAAC sync - file {da} exists and is different from delivery - we cannot delivery this file in the same version')
+
+
+                else:
+                    # If it's not there yet, copy
+                    utils.print_and_call(f'cp {de} {da}')
+                    continue
+
+
 
 
 
