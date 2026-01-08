@@ -149,38 +149,42 @@ def update_EMIT_plume_list_windspeeds(current_wind_speed_csv_filename = None,
         logging.debug(new_plume)
         ind = all_plume_list.index(new_plume)
         
+        fids_str = '_'.join(j['features'][ind]['properties']['fids'])
         if j['features'][ind]['properties']['Psuedo-Origin'] == '':
             d = {'plume_id': new_plume, 'FID': fids_str}
             results_list.append(d)
             continue
 
-        lon, lat, _ = json.loads(j['features'][ind]['properties']['Psuedo-Origin'])['coordinates']
-        fids_str = '_'.join(j['features'][ind]['properties']['fids'])
-        fid = j['features'][ind]['properties']['fids'][0] # Just use the first one if there are two
+        d = get_EMIT_plume_windspeeds(new_plume, current_wind_speed_csv_filename)
+        d = d.to_dict(orient='records')[0]
 
-        if fid[:4].lower() == 'emit':
-            date = fid[4:8] + '-' + fid[8:10] + '-' + fid[10:12]
-            frac_time = float(fid[13:15]) + float(fid[15:17])/60 + float(fid[17:19])/3600
-        elif fid[:3].lower() == 'av3':
-            date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
-            frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
-        elif fid[:3].lower() == 'ang':
-            date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
-            frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
-        else:
-            raise ValueError(f'Instrument type unrecognized from FID: {fid}')
+        #lon, lat, _ = json.loads(j['features'][ind]['properties']['Psuedo-Origin'])['coordinates']
+        #fids_str = '_'.join(j['features'][ind]['properties']['fids'])
+        #fid = j['features'][ind]['properties']['fids'][0] # Just use the first one if there are two
 
-        with tempfile.TemporaryDirectory() as hrrr_products:
-            r_HRRR, r_ERA5 = get_w10_reanalysis(lat, lon, date, frac_time, hrrr_products)
+        #if fid[:4].lower() == 'emit':
+        #    date = fid[4:8] + '-' + fid[8:10] + '-' + fid[10:12]
+        #    frac_time = float(fid[13:15]) + float(fid[15:17])/60 + float(fid[17:19])/3600
+        #elif fid[:3].lower() == 'av3':
+        #    date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
+        #    frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
+        #elif fid[:3].lower() == 'ang':
+        #    date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
+        #    frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
+        #else:
+        #    raise ValueError(f'Instrument type unrecognized from FID: {fid}')
 
-        d = {'plume_id': new_plume,
-             'FID': fids_str}
+        #with tempfile.TemporaryDirectory() as hrrr_products:
+        #    r_HRRR, r_ERA5 = get_w10_reanalysis(lat, lon, date, frac_time, hrrr_products)
 
-        HRRR_names = ['w10_hrrr_m_per_s', 'w10_dir_hrrr_deg_N_from_E', 'w10_avg_hrrr_m_per_s', 'w10_std_hrrr_m_per_s', 'n_valid_u10_hrrr', 'n_valid_v10_hrrr', 't2m_hrrr_K', 'surface_pressure_hrrr_Pa']
-        [d.update({key:item}) for key, item in zip(HRRR_names, r_HRRR)]
+        #d = {'plume_id': new_plume,
+        #     'FID': fids_str}
 
-        era5_names = ['w10_era5_m_per_s', 'w10_dir_era5_deg_N_from_E', 'w10_avg_era5_m_per_s', 'w10_std_era5_m_per_s', 'n_valid_u10_era5', 'n_valid_v10_era5', 't2_era5_K', 'surface_pressure_era5_Pa']
-        [d.update({key:item}) for key, item in zip(era5_names, r_ERA5)]
+        #HRRR_names = ['w10_hrrr_m_per_s', 'w10_dir_hrrr_deg_N_from_E', 'w10_avg_hrrr_m_per_s', 'w10_std_hrrr_m_per_s', 'n_valid_u10_hrrr', 'n_valid_v10_hrrr', 't2m_hrrr_K', 'surface_pressure_hrrr_Pa']
+        #[d.update({key:item}) for key, item in zip(HRRR_names, r_HRRR)]
+
+        #era5_names = ['w10_era5_m_per_s', 'w10_dir_era5_deg_N_from_E', 'w10_avg_era5_m_per_s', 'w10_std_era5_m_per_s', 'n_valid_u10_era5', 'n_valid_v10_era5', 't2_era5_K', 'surface_pressure_era5_Pa']
+        #[d.update({key:item}) for key, item in zip(era5_names, r_ERA5)]
 
         results_list.append(d)
 
@@ -190,7 +194,7 @@ def update_EMIT_plume_list_windspeeds(current_wind_speed_csv_filename = None,
                 df_combined = df_new
             else:
                 df_combined = pd.concat([df_combined, df_new], ignore_index = True, sort = False)
-            df_combined.to_csv(f, index = False)
+            df_combined.to_csv(output_csv_filename, index = False)
             results_list = []
 
     df_new = pd.DataFrame(results_list)
@@ -221,34 +225,38 @@ def get_EMIT_plume_windspeeds(plume, input_wind_speed_csv_filename = None):
     if plume['properties']['Psuedo-Origin'] == '':
         return None
 
+    lon, lat, _ = json.loads(plume['properties']['Psuedo-Origin'])['coordinates']
+    date, frac_time = get_datetime_from_fid(plume['properties']['fids'][0])
+
     if os.path.exists(input_wind_speed_csv_filename):
         df_current = pd.read_csv(input_wind_speed_csv_filename)
 
-        match_idx = df_current['plume_id'] == plume['properties']['Plume ID']
-        if np.sum(match_idx) > 0:
+        # Previously, plume_id was used.  Updated to care about lat/lon/time, which is the real intersection
+        match_idx = np.logical_and.reduce((
+            df_current['date'] == date,
+            df_current['frac_time'] == frac_time,
+            np.isclose(df_current['lat'], lat, 1e-5),
+            np.isclose(df_current['lon'], lon, 1e-5)
+        ))
+        #match_idx = df_current['plume_id'] == plume['properties']['Plume ID']
+        if np.sum(match_idx) == 1:
             return df_current[match_idx], False
+        elif np.sum(match_idx) > 1:
+            logging.warning(f'Multiple matching windspeed entries found for plume {plume["properties"]["Plume ID"]} at lat {lat}, lon {lon}, date {date}, frac_time {frac_time}. Using the first match.')
+            return df_current[match_idx].iloc[[0]], False 
+        else:
+            logging.debug('No matching windspeed entry found, computing new windspeed...')
 
-
-    lon, lat, _ = json.loads(plume['properties']['Psuedo-Origin'])['coordinates']
     fids_str = '_'.join(plume['properties']['fids'])
-    fid = plume['properties']['fids'][0] # Just use the first one if there are two
-
-    if fid[:4].lower() == 'emit':
-        date = fid[4:8] + '-' + fid[8:10] + '-' + fid[10:12]
-        frac_time = float(fid[13:15]) + float(fid[15:17])/60 + float(fid[17:19])/3600
-    elif fid[:3].lower() == 'av3':
-        date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
-        frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
-    elif fid[:3].lower() == 'ang':
-        date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
-        frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
-    else:
-        raise ValueError(f'Instrument type unrecognized from FID: {fid}')
 
     with tempfile.TemporaryDirectory() as hrrr_products:
         r_HRRR, r_ERA5 = get_w10_reanalysis(lat, lon, date, frac_time, hrrr_products)
 
     d = {'plume_id': plume['properties']['Plume ID'],
+         'lat': lat,
+         'lon': lon,
+         'date': date,
+         'frac_time': frac_time,
          'FID': fids_str}
 
     HRRR_names = ['w10_hrrr_m_per_s', 'w10_dir_hrrr_deg_N_from_E', 'w10_avg_hrrr_m_per_s', 'w10_std_hrrr_m_per_s', 'n_valid_u10_hrrr', 'n_valid_v10_hrrr', 't2m_hrrr_K', 'surface_pressure_hrrr_Pa']
@@ -260,6 +268,21 @@ def get_EMIT_plume_windspeeds(plume, input_wind_speed_csv_filename = None):
     d = pd.DataFrame([d])
 
     return d, True
+
+
+def get_datetime_from_fid(fid):
+    if fid[:4].lower() == 'emit':
+        date = fid[4:8] + '-' + fid[8:10] + '-' + fid[10:12]
+        frac_time = float(fid[13:15]) + float(fid[15:17])/60 + float(fid[17:19])/3600
+    elif fid[:3].lower() == 'av3':
+        date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
+        frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
+    elif fid[:3].lower() == 'ang':
+        date = fid[3:7] + '-' + fid[7:9] + '-' + fid[9:11]
+        frac_time = float(fid[12:14]) + float(fid[14:16])/60 + float(fid[16:18])/3600
+    else:
+        raise ValueError(f'Instrument type unrecognized from FID: {fid}')
+    return date, np.round(frac_time, 5)
 
 
 def get_w10_reanalysis(plume_lat, plume_lon, date, frac_time, save_path): 

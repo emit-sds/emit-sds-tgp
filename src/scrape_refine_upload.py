@@ -31,7 +31,7 @@ Removing the need for the background calcluation eliminates this step, and it ha
 
 
 import argparse
-import os
+import os, filecmp
 import numpy as np
 import json
 import time
@@ -69,10 +69,11 @@ def main(input_args=None):
     parser.add_argument('--logfile', type=str, default=None, help='output file to write log to')    
     parser.add_argument('--continuous', action='store_true', help='run continuously')    
     parser.add_argument('--track_coverage_file', default='/store/brodrick/emit/emit-visuals/track_coverage_pub.json')
-    parser.add_argument('--plume_buffer_px', type=int, default=30, help='number of pixels to buffer plume cutouts by')
+    parser.add_argument('--plume_buffer_px', type=int, default=100, help='number of pixels to buffer plume cutouts by')
     parser.add_argument('--write_dcid_tifs', action='store_true', help='write out dcid level tifs for debugging')
     parser.add_argument('--n_cores', type=int, default=1, help='number of CPUs to use')
     parser.add_argument('--num_dcids', type=int, default=-1, help='number of DCIDs to process, -1 for all')
+    parser.add_argument('--specific_pid', type=str, default=None, help='Run this and only this plume ID (for debugging)')
     parser.add_argument('--sync_results', action='store_true', help='sync results to remove server')
     args = parser.parse_args(input_args)
 
@@ -135,7 +136,14 @@ def main(input_args=None):
       
         logging.info(f'Total plumes: {len(manual_annotations["features"])}')
         logging.debug('Run Spatial-Temporal Intersection to find FIDs')
-        manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, manual_annotations_previous)
+        if args.specific_pid is None:
+            manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, manual_annotations_previous)
+        else:
+            # This is a special case primarily for development
+            logging.info(f'Filtering to only {args.specific_pid}')
+            manual_annotations['features'] = [feat for feat in manual_annotations['features'] if feat['properties']['Plume ID'] == args.specific_pid]
+            manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, None)
+
         logging.info(f'New plumes, post fid filter: {len(new_plumes)}')
         manual_annotations_df = pd.json_normalize(manual_annotations['features'])
         most_recent_plume_create = pd.to_datetime(manual_annotations_df['properties.Time Created']).max()
@@ -241,11 +249,14 @@ def main(input_args=None):
         ws_df.drop_duplicates(subset=['plume_id'], keep='last', inplace=True)
         ws_df.to_csv(fn.working_windspeed_csv, index=False)
 
+        fn.daac_sync()
+
         # Sync
         if args.sync_results:
             utils.print_and_call(f'rclone copy  {fn.output_json_internal} redhat:/data/emit/mmgis/coverage/')
             utils.print_and_call(f'rclone copy  {fn.output_json_external} redhat:/data/emit/mmgis/coverage/')
 
+    fn.daac_sync()
         
 
 
@@ -259,6 +270,7 @@ class Filenames:
         # Output / intput jsons are identical, internal just includes additional information
         self.output_json_external = os.path.join(args.out_dir, 'combined_plume_metadata_external.json') # Output (public facing) metadata file
         self.output_json_internal = os.path.join(args.out_dir, 'combined_plume_metadata_internal.json') # Output (internal facing) metadata file
+        self.daac_dir = os.path.join(args.out_dir, 'daac') # Ready for DAAC sync
         self.delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
         self.quant_dir = os.path.join(args.out_dir, 'quantification') # Quantification working directory
         self.proc_dir = os.path.join(args.out_dir, 'processing') # Processing working directory
@@ -268,6 +280,7 @@ class Filenames:
             os.makedirs(self.delivery_dir, exist_ok=True)
             os.makedirs(self.quant_dir, exist_ok=True)
             os.makedirs(self.proc_dir, exist_ok=True)
+            os.makedirs(self.daac_dir, exist_ok=True)
         
     @staticmethod
     def plume_delivery_basename(outdir, feat):
@@ -283,11 +296,23 @@ class Filenames:
         outmask_poly_file = os.path.join(outbase + '_polygon.json')
         outmask_ort_file = os.path.join(outbase + '_mask_ort.tif')
         return outmask_finepoly_file, outmask_poly_file, outmask_ort_file
-    
-    def delivery_filenames(self, poly_plume, gtype):
-        delivery_base = self.plume_delivery_basename(self.delivery_dir, poly_plume)
-        os.makedirs(os.path.dirname(delivery_base), exist_ok=True)
 
+    def quantification_filenames(self, poly_plume, gtype):
+        base = self.plume_working_basename(self.quant_dir, poly_plume)
+
+        raster_file = base + '_unmasked_' + gtype.upper() + '.tif'
+        unc_file = base + '_unmasked_' + gtype.upper() + '_unc.tif'
+        sns_file = base + '_unmasked_' + gtype.upper() + '_sns.tif'
+
+        return raster_file, unc_file, sns_file
+    
+    def delivery_filenames(self, poly_plume, gtype, daac_version=False):
+        if daac_version:
+            delivery_base = self.plume_delivery_basename(self.daac_dir, poly_plume)
+        else:
+            delivery_base = self.plume_delivery_basename(self.delivery_dir, poly_plume)
+
+        os.makedirs(os.path.dirname(delivery_base), exist_ok=True)
         delivery_raster_file = os.path.join(delivery_base + '.tif')
         delivery_ql_file = os.path.join(delivery_base + '.png')
         delivery_json_file = os.path.join(delivery_base + '.json')
@@ -310,6 +335,31 @@ class Filenames:
                 'type': 'document'
             }]
         return img_dicts
+
+    def daac_sync(self):
+
+        output_plumes = [x for x in json.load(open(self.output_json_external, 'r'))['features'] if x['geometry']['type'] == 'Polygon']
+        for plume in output_plumes:
+            delivery_raster, delivery_ql, delivery_json, delivery_uncert, delivery_sens = self.delivery_filenames(plume, 'point', daac_version=False)
+            daac_raster, daac_ql, daac_json, daac_uncert, daac_sens = self.delivery_filenames(plume, 'point', daac_version=True)
+            for de, da in zip([delivery_raster, delivery_ql, delivery_json],
+                               [daac_raster, daac_ql, daac_json]):
+
+                if os.path.isfile(da):
+                    # If it's there and the same, skip safely
+                    if filecmp.cmp(de, da, shallow=False):
+                        continue
+                    else:
+                        # If it's there and different, raise the alarm
+                        logging.warning(f'DAAC sync - file {da} exists and is different from delivery - we cannot delivery this file in the same version')
+
+
+                else:
+                    # If it's not there yet, copy
+                    utils.print_and_call(f'cp {de} {da}')
+                    continue
+
+
 
 
 
@@ -427,15 +477,18 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
 
         delivery_raster_file, delivery_ql_file, delivery_json_file, delivery_uncert_file, delivery_sens_file = fn.delivery_filenames(poly_plume, args.type)
 
+        # Write delivery files
         meta = plume_io.get_metadata(poly_plume, plume_io.global_metadata(data_version=args.data_version))
-        plume_io.write_cog(delivery_raster_file, cut_plume_data.reshape((cut_plume_data.shape[0], cut_plume_data.shape[1],1)).astype(np.float32), 
-                  newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
-        plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file)
+        plume_io.write_cog(delivery_raster_file, cut_plume_data.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
+        plume_io.write_cog(delivery_uncert_file, cut_uncdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
+        plume_io.write_cog(delivery_sens_file, cut_snsdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
+        plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file, inmask=loc_fid_mask)
 
-        plume_io.write_cog(delivery_uncert_file, cut_uncdat.reshape((cut_uncdat.shape[0], cut_uncdat.shape[1],1)).astype(np.float32), 
-                  newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
-        plume_io.write_cog(delivery_sens_file, cut_snsdat.reshape((cut_snsdat.shape[0], cut_snsdat.shape[1],1)).astype(np.float32), 
-                  newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
+        # Write unmasked version of delivery files for quantification (mainly for plotting)
+        quant_raster_file, quant_uncert_file, quant_sens_file = fn.quantification_filenames(poly_plume, args.type)
+        plume_io.write_cog(quant_raster_file, cut_plume_data.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
+        plume_io.write_cog(quant_uncert_file, cut_uncdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
+        plume_io.write_cog(quant_sens_file, cut_snsdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
 
         # Compute Emissions
         emissions_info, windspeed_info = compute_Q_and_uncertainty_utils.single_plume_emissions(
@@ -443,9 +496,9 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
             poly_plume,
             fn.quant_dir,
             fn.proc_dir,
-            delivery_raster_file,
-            delivery_sens_file,
-            delivery_uncert_file,
+            quant_raster_file,
+            quant_sens_file,
+            quant_uncert_file,
             fn.annotation_file,
             working_windspeed_csv=fn.working_windspeed_csv,
             overrule_simple_ime_flag=True, # we want to run the calc no matter what - we'll discard later per metadata
