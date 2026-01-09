@@ -240,15 +240,10 @@ def main(input_args=None):
                 utils.print_and_call(f'cp {fn.annotation_file} {fn.previous_annotation_file}')
                 plume_io.write_geojson_linebyline(fn.output_json_internal, outdict) # Final write
                 plume_io.write_external_geojson(fn.output_json_internal, fn.output_json_external)
+                export_windspeeds(fn.working_windspeed_csv, updated_windspeeds)
+                updated_windspeeds = []
         
-        updated_windspeeds = [x for x in updated_windspeeds if x is not None]
-        if os.path.isfile(fn.working_windspeed_csv):
-            wd_df = pd.read_csv(fn.working_windspeed_csv)
-            ws_df = pd.concat([wd_df, pd.DataFrame(updated_windspeeds)], ignore_index=True)
-        else:
-            ws_df = pd.DataFrame(updated_windspeeds)
-        ws_df.drop_duplicates(subset=['plume_id'], keep='last', inplace=True)
-        ws_df.to_csv(fn.working_windspeed_csv, index=False)
+        export_windspeeds(fn.working_windspeed_csv, updated_windspeeds)
 
         fn.daac_sync()
 
@@ -360,6 +355,18 @@ class Filenames:
                     continue
 
 
+def export_windspeeds(working_windspeed_csv, updated_windspeeds):
+    if len(updated_windspeeds) == 0:
+        return
+    updated_windspeeds = [x for x in updated_windspeeds if x is not None]
+    if os.path.isfile(working_windspeed_csv):
+        wd_df = pd.read_csv(working_windspeed_csv)
+        ws_df = pd.concat([wd_df, pd.DataFrame(updated_windspeeds)], ignore_index=True)
+    else:
+        ws_df = pd.DataFrame(updated_windspeeds)
+    ws_df.drop_duplicates(subset=['plume_id'], keep='last', inplace=True)
+    ws_df.to_csv(working_windspeed_csv, index=False)
+
 
 
 
@@ -470,7 +477,9 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
             logging.warning(f'ACK - multiple polygons from one Plume ID in file {outmask_poly_file}')
         plume_to_add[0]['geometry']['coordinates'] = [[[np.round(x[0],5), np.round(x[1],5)] for x in plume_to_add[0]['geometry']['coordinates'][0]]]
 
-        poly_plume, point_plume = utils.build_plume_properties(feat['properties'], plume_to_add[0]['geometry'], cut_plume_data, 
+        masked_cut_plume_data = cut_plume_data.copy()
+        masked_cut_plume_data[~loc_fid_mask] = -9999
+        poly_plume, point_plume = utils.build_plume_properties(feat['properties'], plume_to_add[0]['geometry'], masked_cut_plume_data, 
                                                                newp_trans, args.data_version, xsize_m, ysize_m)
 
 

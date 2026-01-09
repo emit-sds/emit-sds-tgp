@@ -133,46 +133,53 @@ def build_plume_properties(plume_input_properties, plume_geometry, plume_data, t
     props['Time Created'] = loc_pp['Time Created']
 
 
-    inplume_dat = plume_data[plume_data != nodata_value]
 
     start_datetime = datetime.datetime.strptime(loc_pp['fids'][0][4:], "%Y%m%dt%H%M%S")
     end_datetime = start_datetime + datetime.timedelta(seconds=1)
 
     start_datetime = start_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
     end_datetime = end_datetime.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-   
-    
-    maxval = np.nanmax(inplume_dat)
-    if len(inplume_dat) < 5 or maxval < 200 or np.isnan(maxval):
-        logging.warning(f'Plume {loc_pp["Plume ID"]} has insufficient data...skipping')
-        return None
-
-    rawloc = np.where(plume_data == maxval)
-    maxval = np.round(maxval)
-
-    #sum and convert to kg.  conversion:
-    # ppm m / 1e6 ppm * x_pixel_size(m)*y_pixel_size(m) 1e3 L / m^3 * 1 mole / 22.4 L * 0.01604 kg / mole
-    ime_scaler = (1.0/1e6)* ((np.abs(xsize_m*ysize_m))/1.0) * (1000.0/1.0) * (1.0/22.4)*(0.01604/1.0)
-
-    ime = np.nansum(inplume_dat) * ime_scaler
-    ime_p = np.nansum(inplume_dat[inplume_dat > 0]) * ime_scaler
-
-    ime = np.round(ime,2)
-    #ime_uncert = np.round(len(inplume_dat) * background * ime_scaler,2)
-
-    max_loc_y = trans[3] + trans[5]*(rawloc[0][0]+0.5)
-    max_loc_x = trans[0] + trans[1]*(rawloc[1][0]+0.5)
-
     props["UTC Time Observed"] = start_datetime
     props["map_endtime"] = end_datetime
-    props["Max Plume Concentration (ppm m)"] = maxval
-    #props["Concentration Uncertainty (ppm m)"] = background
-    #props["Integrated Methane Enhancement (kg CH4)"] = ime
-    #props["Integrated Methane Enhancement - Positive (kg CH4)"] = ime_p
-    #props["Integrated Methane Enhancement Uncertainty (kg CH4)"] = ime_uncert
-    props["Latitude of max concentration"] = np.round(max_loc_y, 5)
-    props["Longitude of max concentration"] = np.round(max_loc_x, 5)
+
+   
+    # Set defaults, to be overwritten
+    props["Max Plume Concentration (ppm m)"] = "NA"
+    props["Latitude of max concentration"] = "NA"
+    props["Longitude of max concentration"] = "NA"
+    max_loc_x = trans[0] + trans[1] * (plume_data.shape[1] / 2)
+    max_loc_y = trans[3] + trans[5] * (plume_data.shape[0] / 2)
+    
+    inplume_dat = plume_data[plume_data != nodata_value]
+
+    if np.sum(plume_data != nodata_value) > 0:
+
+        maxval = np.nanmax(inplume_dat)
+        if len(inplume_dat) >= 5 and maxval >= 200 and np.isnan(maxval) == False:
+
+            rawloc = np.where(plume_data == maxval)
+            maxval = np.round(maxval)
+
+            #sum and convert to kg.  conversion:
+            # ppm m / 1e6 ppm * x_pixel_size(m)*y_pixel_size(m) 1e3 L / m^3 * 1 mole / 22.4 L * 0.01604 kg / mole
+            ime_scaler = (1.0/1e6)* ((np.abs(xsize_m*ysize_m))/1.0) * (1000.0/1.0) * (1.0/22.4)*(0.01604/1.0)
+
+            ime = np.nansum(inplume_dat) * ime_scaler
+            ime_p = np.nansum(inplume_dat[inplume_dat > 0]) * ime_scaler
+
+            ime = np.round(ime,2)
+            #ime_uncert = np.round(len(inplume_dat) * background * ime_scaler,2)
+
+            max_loc_y = trans[3] + trans[5]*(rawloc[0][0]+0.5)
+            max_loc_x = trans[0] + trans[1]*(rawloc[1][0]+0.5)
+
+            props["Max Plume Concentration (ppm m)"] = maxval
+            props["Latitude of max concentration"] = np.round(max_loc_y, 5)
+            props["Longitude of max concentration"] = np.round(max_loc_x, 5)
+        else:
+            logging.warning(f'Plume {loc_pp["Plume ID"]} has insufficient data...skipping max concentration values')
+    else:
+        logging.warning(f'Plume {loc_pp["Plume ID"]} has insufficient data...skipping max concentration values')
     
 
     # For R1 Review
