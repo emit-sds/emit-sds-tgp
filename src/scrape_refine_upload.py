@@ -75,6 +75,7 @@ def main(input_args=None):
     parser.add_argument('--num_dcids', type=int, default=-1, help='number of DCIDs to process, -1 for all')
     parser.add_argument('--specific_pid', type=str, default=None, help='Run this and only this plume ID (for debugging)')
     parser.add_argument('--sync_results', action='store_true', help='sync results to remove server')
+    parser.add_argument('--software_build_version', type=str, default=None, help='overwrite current tag with this software build version')
     args = parser.parse_args(input_args)
 
     logging.basicConfig(format='%(levelname)s:%(asctime)s ||| %(message)s', level=args.loglevel,
@@ -253,10 +254,9 @@ def main(input_args=None):
 
         # Sync
         if args.sync_results:
-            utils.print_and_call(f'rclone copy  {fn.output_json_internal} redhat:/data/emit/mmgis/coverage/')
-            utils.print_and_call(f'rclone copy  {fn.output_json_external} redhat:/data/emit/mmgis/coverage/')
+            utils.print_and_call(f'scp -q {fn.output_json_internal} ${{USER}}@${{NGIS_DATA_IP}}:/data/emit/mmgis/coverage/')
+            utils.print_and_call(f'scp -q {fn.output_json_external} ${{USER}}@${{NGIS_DATA_IP}}:/data/emit/mmgis/coverage/')
 
-    fn.daac_sync()
         
 
 
@@ -478,7 +478,7 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
         delivery_raster_file, delivery_ql_file, delivery_json_file, delivery_uncert_file, delivery_sens_file = fn.delivery_filenames(poly_plume, args.type)
 
         # Write delivery files
-        meta = plume_io.get_metadata(poly_plume, plume_io.global_metadata(data_version=args.data_version))
+        meta = plume_io.get_metadata(poly_plume, plume_io.global_metadata(data_version=args.data_version, software_version=args.software_build_version))
         plume_io.write_cog(delivery_raster_file, cut_plume_data.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
         plume_io.write_cog(delivery_uncert_file, cut_uncdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
         plume_io.write_cog(delivery_sens_file, cut_snsdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
