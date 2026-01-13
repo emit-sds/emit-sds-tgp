@@ -56,10 +56,12 @@ from skimage.measure import label as imlabel
 from skimage.morphology import disk, remove_small_objects
 from matplotlib.path import Path
 import matplotlib.patches as patches
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import rasterio as rio
 import pandas as pd
 from annotate import plume_io
+import pdb
 
 #              ppm(m)   L/m^3     mole/L    kg/mole
 PPMM2KGCH4 = (1.0/1e6)*(1000.0)*(1.0/22.4)*(0.016042) # 7.161607142857143e-07
@@ -471,6 +473,7 @@ def compute_flux(args):
     
     #ps = abs(cmfsrc.res[0])
     trans = cmfsrc.GetGeoTransform()
+    pdb.set_trace()
     ps = (abs(trans[1]) + abs(trans[5])) / 2.0
     logging.debug(f'ps: {ps:.3f} (m^2)')
 
@@ -1077,37 +1080,45 @@ def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_i
         plume_min_x, plume_max_x = min([plume_x.min(), jmin-off]), max([plume_x.max(), jmax+off])
         plume_min_y, plume_max_y = min([plume_y.min(), imin-off]), max([plume_y.max(), imax+off])
 
-    figrows,figcols,figscale=2,3,5
+    figrows,figcols,figscale=3,2,5
 
     figsize=(2*figcols*figscale,figrows*figscale*1.05)
-    fig,ax = pl.subplots(figrows,figcols,figsize=figsize)
-                    #sharex=True,sharey=True)
-    
+    mosaic = """.AABB
+                .CCDD
+                .EEFF"""
+    fig, axm = pl.subplot_mosaic(mosaic, layout='constrained', figsize=figsize)
+    ax = [[axm['A'], axm['C'], axm['E']],
+          [axm['B'], axm['D'], axm['F']]]
+
+    def do_one_imshow(axis, imdata, vmin, vmax, cmap, do_cb = True):
+        im = axis.imshow(imdata,vmin=vmin,vmax=vmax,cmap=cmap)
+        if do_cb:
+            divider = make_axes_locatable(axis)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            fig.colorbar(im, cax=cax)
+
     # Full plume
     ma = np.max(pltcmf[circle_min_y:circle_max_y, 
                        circle_min_x:circle_max_x])
-    im = ax[0][0].imshow(pltcmf,vmin=0,vmax=1500,cmap='inferno')
-    fig.colorbar(im, ax=ax[0][0])
-    im = ax[1][0].imshow(pltcmf,vmin=0,vmax=ma,cmap='inferno')
-    fig.colorbar(im, ax=ax[1][0])
+
+    do_one_imshow(ax[0][0], pltcmf, 0, 1500, 'inferno', do_cb = False)
+    do_one_imshow(ax[1][0], pltcmf, 0, ma,   'inferno', do_cb = False)
 
     # Circle
-    im = ax[0][1].imshow(pltcmf,vmin=0,vmax=1500,cmap='inferno')
-    fig.colorbar(im, ax=ax[0][1])
-    im = ax[1][1].imshow(pltcmf,vmin=0,vmax=ma,cmap='inferno')
-    fig.colorbar(im, ax=ax[1][1])
+    do_one_imshow(ax[0][1], pltcmf, 0, 1500, 'inferno')
+    do_one_imshow(ax[1][1], pltcmf, 0, ma,   'inferno')
 
-
-    ax[0][2].imshow(pltcmf,vmin=0,vmax=1500,cmap='YlOrRd') 
+    # Plume Mask
+    do_one_imshow(ax[0][2], pltcmf, 0, 1500, 'YlOrRd', do_cb = False)
+    do_one_imshow(ax[1][2], pltcmf, 0, ma,   'YlOrRd', do_cb = False)
     plumemask[plumemask==1] = np.nan
     ax[0][2].imshow(plumemask,vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8)
-    ax[1][2].imshow(pltcmf,vmin=0,vmax=ma,cmap='YlOrRd') 
     ax[1][2].imshow(plumemask,vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8)
 
-    ax[0][0].plot(j, i, 'o', color = 'white', markersize = 10)
-    ax[0][1].plot(j, i, 'o', color = 'white', markersize = 10)
-    ax[1][0].plot(j, i, 'o', color = 'white', markersize = 10)
-    ax[1][1].plot(j, i, 'o', color = 'white', markersize = 10)
+    ax[0][0].plot(j, i, 'o', color = 'lime', markersize = 10)
+    ax[0][1].plot(j, i, 'o', color = 'lime', markersize = 10)
+    ax[1][0].plot(j, i, 'o', color = 'lime', markersize = 10)
+    ax[1][1].plot(j, i, 'o', color = 'lime', markersize = 10)
     ax[0][2].plot(j, i, 'o', color = 'red', markersize = 10)
     ax[1][2].plot(j, i, 'o', color = 'red', markersize = 10)
 
@@ -1140,11 +1151,11 @@ def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_i
     ax[1][2].set_xlim([circle_min_x, circle_max_x])
     ax[1][2].set_ylim([circle_min_y, circle_max_y])
     
-    pl.suptitle(f'ps={ps:3.1f}')                    
-    pl.tight_layout()
+    #pl.suptitle(f'ps={ps:3.1f}')                    
+    #pl.tight_layout()
     pl.savefig(imefigf)
 
-    pl.savefig(imefigf_zoom)
+    #pl.savefig(imefigf_zoom)
     pl.close()
 
 if __name__ == '__main__':
