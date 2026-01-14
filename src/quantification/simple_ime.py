@@ -313,7 +313,7 @@ def get_plume_metadata_MMGIS(
     pseudo_o = json.loads(feature['properties']['Psuedo-Origin'])
     plume_lat = pseudo_o['coordinates'][1]
     plume_lon = pseudo_o['coordinates'][0]
-    fids_name = 'fids' if 'fids' in list(feature['properties'].keys()) else 'FID'
+    fids_name = 'fids' if 'fids' in list(feature['properties'].keys()) else 'Scene FIDs'
     scene_fids = feature['properties'][fids_name]
     scene_fids = scene_fids if isinstance(scene_fids, list) else [scene_fids]
     
@@ -408,7 +408,7 @@ def compute_Q_from_plume_json(
 
         elif instrument_name.lower().startswith('emit'):
             ## EMIT
-            cmd = f'python3 compute_flux.py --minppmm 500 --mergedistm 200 --maxppmm 3000 --maxfetchm 1000 --minaream2 0 --cmfimgf {full_path} ' + \
+            cmd = f'python3 quantification/compute_flux.py --minppmm 500 --mergedistm 200 --maxppmm 3000 --maxfetchm 1000 --minaream2 0 --cmfimgf {full_path} ' + \
                 f'--lng {plume_lon} --lat {plume_lat} --plot_diag --verbose --csv_file {csv_file} --fid {plume_complex_id} ' + \
                 f'--csv_path {csv_path} --plot_path {plot_path} --name_suffix "{name_suffix}" --sns_file "{sns_arg}" --unc_file "{unc_arg}" ' + \
                 f'--manual_boundary_coordinates_lon_lat {bound_str} --mask_mode infer --q_method mask' 

@@ -24,6 +24,8 @@ import os
 import pandas as pd
 from typing import List
 from copy import deepcopy
+from matplotlib import pyplot as plt
+from matplotlib import image as mpimg
 
 from quantification import compute_flux, windspeed
 
@@ -232,6 +234,9 @@ def single_plume_emissions(feat: dict,
         emissions_info['Emissions Rate Estimate Uncertainty (kg/hr)'] = float(np.round(sigma_Q.values[0],4))
         emissions_info['Fetch Length (m)'] = float(np.round(flux_res[5],4))
 
+        imefigf = os.path.join(lfa.plot_path, lfa.fid+'_ql.png')
+        add_results_to_image(lfa.fid, emissions_info, lfa.lat, lfa.lng, imefigf)
+
         for key in emissions_info.keys():
             try:
                 if np.isnan(emissions_info[key]):
@@ -252,3 +257,54 @@ def single_plume_emissions(feat: dict,
         return emissions_info, dfw
     
     return emissions_info, None
+
+def add_results_to_image(plume_id, emissions_info, lat_float, lng_float, input_image_filename, output_image_filename = None, dpi = 150):
+    """
+    Add emission estimate results to the plume images created in compute_flux.
+    Expected operation is to overwrite the input image by leaving output_image_filename
+    as the default None.
+
+    Inputs:
+    plume_id: string
+        Plume ID, eg: CH4_PlumeComplex-50
+    emissions_info: dict
+        Contains the emissions rate info corresponding to plume plume_id
+    lat_float, lon_float: float
+        Pseudo-origin latitutde and longitude as floats
+    input_image_filename: str
+        Full filename to the plume image file created by compute_flux.py
+    output_image_filename: str
+        Full filename to save the updated image. Leave as the default None
+        to simply overwrite the input image.
+    dpi: float
+        DPI for the output image using matplotlib's savefig()
+    """
+    pm = "\u00B1" # plus minus symbol
+
+    if output_image_filename is None:
+        output_image_filename = input_image_filename
+    
+    IME = emissions_info['Emissions Rate Estimate (kg/hr)'] * emissions_info['Fetch Length (m)'] / emissions_info['Wind Speed (m/s)']
+
+    s = f'{plume_id}\n' + \
+        f'({lat_float:.3f}, {lng_float:.3f})\n' + \
+        f'Q: {emissions_info["Emissions Rate Estimate (kg/hr)"]:.0f} {pm} {emissions_info["Emissions Rate Estimate Uncertainty (kg/hr)"]:.0f} kg/hr\n' + \
+        f'{emissions_info["Wind Speed Source"].upper()}: {emissions_info["Wind Speed (m/s)"]:.1f} {pm} {emissions_info["Wind Speed Std (m/s)"]:.1f} m/s\n' + \
+        f'IME: {IME:.0f} kg\n' + \
+        f'fetch: {emissions_info["Fetch Length (m)"]:.0f} m'
+
+    if not os.path.exists(input_image_filename):
+        raise IOError(f'Input image {input_image_filename} does not exist.')
+
+    img = mpimg.imread(input_image_filename)
+    h_px, w_px = img.shape[:2]                # height, width in pixels
+
+    fig = plt.figure(figsize=(w_px / dpi, h_px / dpi), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])           # left, bottom, width, height (0‑1)
+    ax.imshow(img)
+    ax.axis('off')
+    ax.text(0.008, 0.99, s, color='black', fontsize=12, ha='left',va='top', transform=ax.transAxes, linespacing=1.5,
+            bbox=dict(facecolor='white', alpha=0.5, pad=5, edgecolor='none'))
+
+    fig.savefig(output_image_filename, dpi=dpi)
+    plt.close(fig)
