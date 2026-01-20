@@ -235,7 +235,7 @@ def single_plume_emissions(feat: dict,
         emissions_info['Fetch Length (m)'] = float(np.round(flux_res[5],4))
 
         imefigf = os.path.join(lfa.plot_path, lfa.fid+'_ql.png')
-        add_results_to_image(lfa.fid, emissions_info, lfa.lat, lfa.lng, imefigf)
+        add_results_to_image(lfa.fid, emissions_info, poly_plume["properties"]["UTC Time Observed"], lfa.lat, lfa.lng, imefigf)
 
         for key in emissions_info.keys():
             try:
@@ -258,7 +258,7 @@ def single_plume_emissions(feat: dict,
     
     return emissions_info, None
 
-def add_results_to_image(plume_id, emissions_info, lat_float, lng_float, input_image_filename, output_image_filename = None, dpi = 150):
+def add_results_to_image(plume_id, emissions_info, date_time_str, lat_float, lng_float, input_image_filename, output_image_filename = None, dpi = 150):
     """
     Add emission estimate results to the plume images created in compute_flux.
     Expected operation is to overwrite the input image by leaving output_image_filename
@@ -269,6 +269,8 @@ def add_results_to_image(plume_id, emissions_info, lat_float, lng_float, input_i
         Plume ID, eg: CH4_PlumeComplex-50
     emissions_info: dict
         Contains the emissions rate info corresponding to plume plume_id
+    date_time_str: str
+        Date and time of data collection
     lat_float, lon_float: float
         Pseudo-origin latitutde and longitude as floats
     input_image_filename: str
@@ -287,6 +289,7 @@ def add_results_to_image(plume_id, emissions_info, lat_float, lng_float, input_i
     IME = emissions_info['Emissions Rate Estimate (kg/hr)'] * emissions_info['Fetch Length (m)'] / emissions_info['Wind Speed (m/s)']
 
     s = f'{plume_id}\n' + \
+        f'{date_time_str}\n' + \
         f'({lat_float:.3f}, {lng_float:.3f})\n' + \
         f'Q: {emissions_info["Emissions Rate Estimate (kg/hr)"]:.0f} {pm} {emissions_info["Emissions Rate Estimate Uncertainty (kg/hr)"]:.0f} kg/hr\n' + \
         f'{emissions_info["Wind Speed Source"].upper()}: {emissions_info["Wind Speed (m/s)"]:.1f} {pm} {emissions_info["Wind Speed Std (m/s)"]:.1f} m/s\n' + \
