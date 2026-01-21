@@ -1088,7 +1088,7 @@ def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_i
           [axm['B'], axm['D'], axm['F']]]
 
     def do_one_imshow(axis, imdata, vmin, vmax, cmap, extent, do_cb = True):
-        im = axis.imshow(imdata,vmin=vmin,vmax=vmax,cmap=cmap, extent=extent)
+        im = axis.imshow(imdata[::-1,:],vmin=vmin,vmax=vmax,cmap=cmap, extent=extent) # reverse first dim
         if do_cb:
             divider = make_axes_locatable(axis)
             cax = divider.append_axes("right", size="5%", pad=0.05)
@@ -1098,14 +1098,21 @@ def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_i
                        circle_min_x:circle_max_x])
 
     nx, ny = pltcmf.shape
-    plume_min_x_m, plume_max_x_m = (plume_min_x - j) * ps, (plume_max_x - j) * ps
-    plume_min_y_m, plume_max_y_m = (plume_min_y - i) * ps, (plume_max_y - i) * ps
+    # Use of imshow with both extent and set_xlim and set_ylim is confusing.
+    # In order to plot with north up, we need to:
+    # 1. reverse the min/max for the vertical dimension in the plot, which we call y here
+    # 2. reverse the bottom and the top in the extent
+    # 3. reverse the first dimension of the array in the imshow command
+    plume_min_x_m, plume_max_x_m = (plume_min_x - j) * ps, (plume_max_x - j) * ps # reverse
+    plume_min_y_m, plume_max_y_m = [(plume_min_y - i) * ps, (plume_max_y - i) * ps][::-1] # reverse
 
     circle_min_x_m, circle_max_x_m = (circle_min_x - j) * ps, (circle_max_x - j) * ps
-    circle_min_y_m, circle_max_y_m = (circle_min_y - i) * ps, (circle_max_y - i) * ps
+    circle_min_y_m, circle_max_y_m = [(circle_min_y - i) * ps, (circle_max_y - i) * ps][::-1]
     
     # Change axes to meters centered on the pseudo-origin
-    extent = [(0-j)*ps, (ny-1-j)*ps, (nx-1-i)*ps, (0-i)*ps]
+    l, r, b, t = (0-j)*ps, (ny-1-j)*ps, (nx-1-i)*ps, (0-i)*ps
+     
+    extent = [l, r, t, b] # reverse top and bottom
     
     # Will be zoomed to show full plume
     do_one_imshow(ax[0][0], pltcmf, 0, 1500, 'inferno', extent, do_cb = False)
