@@ -35,6 +35,7 @@ import os, filecmp
 import numpy as np
 import json
 import time
+import datetime
 from shapely.geometry import Polygon
 from osgeo import gdal
 from rasterio.features import rasterize
@@ -42,6 +43,8 @@ import logging
 from emit_main.workflow.workflow_manager import WorkflowManager
 import pandas as pd
 from typing import List
+import subprocess
+import click
 
 from annotate import plume_io, filter, utils
 from quantification import compute_flux, windspeed, compute_Q_and_uncertainty_utils
@@ -55,28 +58,52 @@ def get_sds_cog(fid, enh_version, dtype='ch4', data_value=''):
     return path
    
 
+@click.command(name="scrape_refine_upload")
+@click.argument('key', type=str)
+@click.argument('id', type=str)
+@click.argument('out_dir', type=str)
+@click.argument('data_version', type=str)
+@click.option('--enh_data_version', type=str, default='v02')
+@click.option('--gtype', type=click.Choice(['ch4','co2']), default='ch4')
+@click.option('--database_config', type=str,  default='/store/emit/ops/repos/emit-main/emit_main/config/ops_sds_config.json')
+@click.option('--loglevel', type=str, default='DEBUG', help='logging verbosity')
+@click.option('--logfile', type=str, default=None, help='output file to write log to')
+@click.option('--continuous', is_flag=True, help='run continuously')
+@click.option('--track_coverage_file', default='/store/brodrick/emit/emit-visuals/track_coverage_pub.json', help='Path to track coverage file')
+@click.option('--plume_buffer_px', type=int, default=100, help='number of pixels to buffer plume cutouts by')
+@click.option('--write_dcid_tifs', is_flag=True, help='write out dcid level tifs for debugging')
+@click.option('--n_cores', type=int, default=1, help='number of CPUs to use')
+@click.option('--num_dcids', type=int, default=-1, help='number of DCIDs to process, -1 for all')
+@click.option('--specific_pid', type=str, default=None, help='Run this and only this plume ID (for debugging)')
+@click.option('--sync_results', is_flag=True, help='sync results to remove server')
+@click.option('--software_build_version', type=str, default=None, help='overwrite current tag with this software build version')
+def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: str, 
+         gtype: str, database_config: str, loglevel, logfile, continuous, track_coverage_file, plume_buffer_px, write_dcid_tifs, n_cores, num_dcids, specific_pid, sync_results, software_build_version):
 
-def main(input_args=None):
-    parser = argparse.ArgumentParser(description="merge jsons")
-    parser.add_argument('key', type=str,  metavar='INPUT_DIR', help='input directory')   
-    parser.add_argument('id', type=str,  metavar='INPUT_DIR', help='input directory')   
-    parser.add_argument('out_dir', type=str,  metavar='OUTPUT_DIR', help='output directory')   
-    parser.add_argument('data_version', type=str)
-    parser.add_argument('--enh_data_version', type=str, default='v02')
-    parser.add_argument('--type', type=str,  choices=['ch4','co2'], default='ch4')   
-    parser.add_argument('--database_config', type=str,  default='/store/emit/ops/repos/emit-main/emit_main/config/ops_sds_config.json')   
-    parser.add_argument('--loglevel', type=str, default='DEBUG', help='logging verbosity')    
-    parser.add_argument('--logfile', type=str, default=None, help='output file to write log to')    
-    parser.add_argument('--continuous', action='store_true', help='run continuously')    
-    parser.add_argument('--track_coverage_file', default='/store/brodrick/emit/emit-visuals/track_coverage_pub.json')
-    parser.add_argument('--plume_buffer_px', type=int, default=100, help='number of pixels to buffer plume cutouts by')
-    parser.add_argument('--write_dcid_tifs', action='store_true', help='write out dcid level tifs for debugging')
-    parser.add_argument('--n_cores', type=int, default=1, help='number of CPUs to use')
-    parser.add_argument('--num_dcids', type=int, default=-1, help='number of DCIDs to process, -1 for all')
-    parser.add_argument('--specific_pid', type=str, default=None, help='Run this and only this plume ID (for debugging)')
-    parser.add_argument('--sync_results', action='store_true', help='sync results to remove server')
-    parser.add_argument('--software_build_version', type=str, default=None, help='overwrite current tag with this software build version')
-    args = parser.parse_args(input_args)
+    # make an args like object that holds the parameters
+    class Args:
+        pass
+    args = Args()
+    args.key = key
+    args.id = id
+    args.out_dir = out_dir
+    args.data_version = data_version
+    args.enh_data_version = enh_data_version
+    args.type = gtype
+    args.database_config = database_config
+    args.loglevel = loglevel
+    args.logfile = logfile
+    args.continuous = continuous
+    args.track_coverage_file = track_coverage_file
+    args.plume_buffer_px = plume_buffer_px
+    args.write_dcid_tifs = write_dcid_tifs
+    args.n_cores = n_cores
+    args.num_dcids = num_dcids
+    args.specific_pid = specific_pid
+    args.sync_results = sync_results
+    args.software_build_version = software_build_version
+
+    
 
     logging.basicConfig(format='%(levelname)s:%(asctime)s ||| %(message)s', level=args.loglevel,
                         filename=args.logfile, datefmt='%Y-%m-%d,%H:%M:%S')
@@ -145,7 +172,8 @@ def main(input_args=None):
             manual_annotations['features'] = [feat for feat in manual_annotations['features'] if feat['properties']['Plume ID'] == args.specific_pid]
             manual_annotations, new_plumes = filter.add_fids(manual_annotations, coverage, None)
 
-        logging.info(f'New plumes, post fid filter: {len(new_plumes)}')
+        latest_bulk_stats = {}
+        latest_bulk_stats['New plumes, post fid filter'] = len(new_plumes)
         manual_annotations_df = pd.json_normalize(manual_annotations['features'])
         most_recent_plume_create = pd.to_datetime(manual_annotations_df['properties.Time Created']).max()
         last_time_range = pd.to_datetime(manual_annotations_df['properties.Time Range End']).dt.tz_localize('UTC').max()
@@ -160,15 +188,20 @@ def main(input_args=None):
         reporting_emission_count = np.sum([ np.all([x['properties'][k] for k in ['R1 - Reviewed', 'R1 - VISIONS', 'R2 - Reviewed', 'R2 - VISIONS']]) and x['properties']['Simple IME Valid'] == 'Yes' for x in manual_annotations['features']])
         r1_review_count = np.sum([ x['properties']['R1 - Reviewed'] is False for x in manual_annotations['features']])
         r2_review_count = np.sum([ np.all([x['properties'][k] for k in ['R1 - Reviewed', 'R1 - VISIONS']]) and not x['properties']['R2 - Reviewed'] for x in manual_annotations['features']])
-        logging.info(f'Plume Complexes Approved for VISIONS: {double_approved_count}')
-        logging.info(f'Approved Plume Complexes with Simple IME Evaluated: {populated_emission_count}')
-        logging.info(f'Plume Complexes with Emission Estimate: {reporting_emission_count}')
-        logging.info(f'R1 Review Deck: {r1_review_count}')
-        logging.info(f'R2 Review Deck: {r2_review_count}')
-        logging.info(f'Most Recent R0 Plume Created: {most_recent_plume_create}')
-        logging.info(f'Most Recent R0 Plume Scene: {last_time_range}')
-        logging.info(f'Most Recent Scene: {coverage["features"][-1]["properties"]["end_time"]}')
-        logging.info(f'Inferred scenes needing R0 Review: {r0_review_needed}')
+
+        latest_bulk_stats['Plume Complexes Approved for VISIONS'] = double_approved_count
+        latest_bulk_stats['Approved Plume Complexes with Simple IME Evaluated'] = populated_emission_count
+        latest_bulk_stats['Plume Complexes with Emission Estimate'] = reporting_emission_count
+        latest_bulk_stats['R1 Review Deck'] = r1_review_count
+        latest_bulk_stats['R2 Review Deck'] = r2_review_count
+        latest_bulk_stats['Most Recent R0 Plume Created'] = str(most_recent_plume_create)
+        latest_bulk_stats['Most Recent R0 Plume Scene'] = str(last_time_range)
+        latest_bulk_stats['Most Recent Scene'] = str(coverage["features"][-1]["properties"]["end_time"])
+        latest_bulk_stats['Inferred scenes needing R0 Review'] = r0_review_needed
+        for key, val in latest_bulk_stats.items():
+            logging.info(f'{key}: {val}')
+        json.dump(latest_bulk_stats, open(fn.output_summary_json, 'w'), indent=2, cls=plume_io.SerialEncoder)
+
         # If there's nothing new, sleep and retry
         if len(new_plumes) == 0:
             time.sleep(10)
@@ -251,6 +284,8 @@ def main(input_args=None):
         if args.sync_results:
             utils.print_and_call(f'scp -q {fn.output_json_internal} ${{USER}}@${{NGIS_DATA_IP}}:/data/emit/mmgis/coverage/')
             utils.print_and_call(f'scp -q {fn.output_json_external} ${{USER}}@${{NGIS_DATA_IP}}:/data/emit/mmgis/coverage/')
+            utils.print_and_call(f'rclone sync {fn.quant_dir}/ {fn.dst_img_dir}/{args.type}_q --progress --transfers=16 --include="*_ql.png" -q > NUL 2>&1')
+
 
         
 
@@ -263,13 +298,20 @@ class Filenames:
         self.previous_annotation_file = os.path.join(args.out_dir, "previous_manual_annotation.json") # Last editted version of annotation file
 
         # Output / intput jsons are identical, internal just includes additional information
-        self.output_json_external = os.path.join(args.out_dir, 'combined_plume_metadata_external.json') # Output (public facing) metadata file
-        self.output_json_internal = os.path.join(args.out_dir, 'combined_plume_metadata_internal.json') # Output (internal facing) metadata file
+        self.output_summary_json = os.path.join(args.out_dir, f'{args.type}_summary.json') # Output (public facing) metadata file
+        self.output_json_external = os.path.join(args.out_dir, f'{args.type}_combined_plume_metadata_external.json') # Output (public facing) metadata file
+        self.output_json_internal = os.path.join(args.out_dir, f'{args.type}_combined_plume_metadata_internal.json') # Output (internal facing) metadata file
         self.daac_dir = os.path.join(args.out_dir, 'daac') # Ready for DAAC sync
         self.delivery_dir = os.path.join(args.out_dir, 'delivery') # Delivery file directory
         self.quant_dir = os.path.join(args.out_dir, 'quantification') # Quantification working directory
         self.proc_dir = os.path.join(args.out_dir, 'processing') # Processing working directory
         self.working_windspeed_csv = os.path.join(args.out_dir, 'working_windspeed_estimates.csv') # Quantification windspeed working file
+
+        self.dst_plm_cogdir = 'redhat:/data/emit/mmgis/mosaics/plm_cogs'
+        self.dst_img_dir = 'redhat:/data/emit/mmgis/mosaics/images'
+
+        self.type = args.type
+
 
         if create:
             os.makedirs(self.delivery_dir, exist_ok=True)
@@ -330,6 +372,15 @@ class Filenames:
                 'type': 'document'
             }]
         return img_dicts
+    
+    def stac_sync(self, dest_dir):
+        output_plumes = [x for x in json.load(open(self.output_json_external, 'r'))['features'] if x['geometry']['type'] == 'Polygon']
+        for plume in output_plumes:
+            plm_in_file = self.delivery_filenames(plume, "ch4", daac_version=True)[0]
+            dt = datetime.datetime.strptime(os.path.basename(plm_in_file).split('_')[0], 'emit%Y%m%dt%H%M%S')
+            plm_out_file = os.path.join(dest_dir, dt.strftime('%Y-%m-%dT%M_%H_%S') + '-to-' + (dt + datetime.timedelta(seconds=1)).strftime('%Y-%m-%dT%M_%H_%S'))
+            cmd_str = f'rclone copyto {plm_in_file} {plm_out_file}.tif --progress -q > NUL 2>&1'
+            subprocess.run(cmd_str, shell=True)
 
     def daac_sync(self):
 
@@ -341,13 +392,21 @@ class Filenames:
                                [daac_raster, daac_ql, daac_json]):
 
                 if os.path.isfile(da):
+                    # Check if file contents are the same - skip geotiff metadata
+                    same = False
+                    if da.endswith('.json'):
+                        if filecmp.cmp(de, da, shallow=False):
+                            same = True
+                    elif da.endswith('.tif') or da.endswith('.png'):
+                        if utils.compare_raster_data(de, da):
+                            same = True
+
                     # If it's there and the same, skip safely
-                    if filecmp.cmp(de, da, shallow=False):
+                    if same:
                         continue
                     else:
                         # If it's there and different, raise the alarm
                         logging.warning(f'DAAC sync - file {da} exists and is different from delivery - we cannot delivery this file in the same version')
-
 
                 else:
                     # If it's not there yet, copy
@@ -491,7 +550,7 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
         plume_io.write_cog(delivery_raster_file, cut_plume_data.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
         plume_io.write_cog(delivery_uncert_file, cut_uncdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
         plume_io.write_cog(delivery_sens_file, cut_snsdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
-        plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file, inmask=loc_fid_mask)
+        plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file, inmask=loc_fid_mask, trim=True)
 
         # Write unmasked version of delivery files for quantification (mainly for plotting)
         quant_raster_file, quant_uncert_file, quant_sens_file = fn.quantification_filenames(poly_plume, args.type)
@@ -558,12 +617,7 @@ def update_features(existing: dict, new_features: List, is_point: bool, add_imgs
  
 
 
-
-
-
- 
 if __name__ == '__main__':
     main()
-
 
 

@@ -16,6 +16,7 @@
 #
 # Authors: Philip G. Brodrick, philip.brodrick@jpl.nasa.gov
 
+import os
 import numpy as np
 import json
 from osgeo import gdal
@@ -116,7 +117,7 @@ def write_color_plume(rawdat, plumes_mask, glt_ds, outname: str, style = 'ch4'):
     write_cog(outname, colorized, glt_ds, nodata_value=0)
 
 
-def write_color_quicklook(indat, output_file, inmask=None):
+def write_color_quicklook(indat, output_file, inmask=None, trim=True):
     dat = indat.copy()
     if inmask is not None:
         dat[np.logical_not(inmask)] = -9999
@@ -126,6 +127,9 @@ def write_color_quicklook(indat, output_file, inmask=None):
     output = np.zeros((indat.shape[0],indat.shape[1],3),dtype=np.uint8)
     output[mask,:] = np.round(plt.cm.plasma(dat[mask])[...,:3] * 255).astype(np.uint8)
     output[mask,:] = np.maximum(1, output[mask])
+
+    if trim:
+        output = trim_color_plume(output, None, nodata_value=0, buffer=0)
 
 
     memdriver = gdal.GetDriverByName('MEM')
@@ -305,18 +309,18 @@ def rawspace_coordinate_conversion(glt, coordinates, trans, ortho=False):
     return rawspace_coords
 
 
-def trim_plume(plume_mask_in, trans, badmask=None, nodata_value=0, buffer=0):
+def trim_color_plume(plume_in, nodata_value=0, buffer=0):
 
-    plume_mask = plume_mask_in
-    if badmask is not None:
-        plume_mask = plume_mask_in.copy()
-        plume_mask[badmask] = nodata_value
+    if len(plume_in.shape) != 3:
+        raise ValueError('plume_in must be a 3D array')
+
+    plume_mask = np.all(plume_in == nodata_value, axis=2)
 
     y_locs = np.where(np.sum(plume_mask != nodata_value, axis=1))[0]
     x_locs = np.where(np.sum(plume_mask != nodata_value, axis=0))[0]
 
     if len(y_locs) == 0 or len(x_locs) == 0:
-        return None, None
+        return None
         #raise ValueError('No valid plume pixels found in mask to trim')
     
     min_y = max(y_locs[0] - buffer, 0)
@@ -324,11 +328,10 @@ def trim_plume(plume_mask_in, trans, badmask=None, nodata_value=0, buffer=0):
     min_x = max(x_locs[0] - buffer, 0)
     max_x = min(x_locs[-1] + buffer, plume_mask.shape[1] - 1)
 
-    trimmed_mask = plume_mask[min_y:max_y+1, min_x:max_x+1].copy()
-    outtrans = list(deepcopy(trans))
-    outtrans[0] += min_x * trans[1]
-    outtrans[3] += min_y * trans[5]
-    return trimmed_mask, outtrans
+    plume_out = plume_in.copy()
+    plume_out = plume_out[min_y:max_y+1, min_x:max_x+1, :]
+    return plume_out
+
 
 def get_window(rawspace_coords, trans, ds_size, buffer_px):
 

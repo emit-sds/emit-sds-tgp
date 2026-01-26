@@ -24,6 +24,7 @@ import subprocess
 from scipy.ndimage import gaussian_filter
 from copy import deepcopy
 import datetime
+from osgeo import gdal
 
 def get_daac_link(feature, product_version):
     prod_v = product_version.split('V')[-1]
@@ -53,6 +54,24 @@ def print_and_call(cmd_str):
     logging.debug(f'Calling: {cmd_str}')
     subprocess.call(cmd_str, shell=True)
 
+def compare_raster_data(file1, file2):
+    ds1 = gdal.Open(file1)
+    ds2 = gdal.Open(file2)
+
+    data1 = ds1.ReadAsArray()
+    data2 = ds2.ReadAsArray()
+
+    trans_match = ds1.GetGeoTransform() == ds2.GetGeoTransform()
+    proj_match = ds1.GetProjection() == ds2.GetProjection()
+
+    if data1.shape != data2.shape:
+        return False
+
+    if np.array_equal(data1, data2) and trans_match and proj_match:
+        return True
+    else:
+        return False
+    
 
 def plume_mask_threshold(input: np.array, pm, style='ch4'):
 
