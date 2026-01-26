@@ -1126,8 +1126,8 @@ def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_i
     do_one_imshow(ax[0][2], pltcmf, 0, 1500, 'YlOrRd', extent, do_cb = False)
     do_one_imshow(ax[1][2], pltcmf, 0, ma,   'YlOrRd', extent, do_cb = False)
     plumemask[plumemask==1] = np.nan
-    ax[0][2].imshow(plumemask,vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8, extent = extent)
-    ax[1][2].imshow(plumemask,vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8, extent = extent)
+    ax[0][2].imshow(plumemask[::-1,:],vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8, extent = extent)
+    ax[1][2].imshow(plumemask[::-1,:],vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8, extent = extent)
 
     ax[0][0].plot(0, 0, 'o', color = 'lime', markersize = 10)
     ax[0][1].plot(0, 0, 'o', color = 'lime', markersize = 10)
