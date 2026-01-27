@@ -56,6 +56,7 @@ from skimage.measure import label as imlabel
 from skimage.morphology import disk, remove_small_objects
 from matplotlib.path import Path
 import matplotlib.patches as patches
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import rasterio as rio
 import pandas as pd
@@ -301,7 +302,6 @@ def compute_flux(args):
         
     imemskf = imebase+'_mask.tif'
     imefigf = imebase+'_ql.png'
-    imefigf_zoom = imebase+'_ql_zoom.png'
     imgfigf = imebase+'_diagimg.pdf'
     diagfigf = imebase+'_diagfig.pdf'
     swpfigf = imebase+'_sweep.pdf'
@@ -560,7 +560,7 @@ def compute_flux(args):
 
     if plot_diag:
         with pl.rc_context({'font.size': 16}):
-            make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_ij, imin, imax, jmin, jmax, imefigf, imefigf_zoom, ps)
+            make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_ij, imin, imax, jmin, jmax, imefigf, ps)
     
     if len(plumepix)==0:
         logging.debug(f'no plume pixels > {minppmm}ppmm with area > {minaream2}, exiting')
@@ -1066,7 +1066,7 @@ def compute_flux(args):
         pl.close()
     return 'success', returns
 
-def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_ij, imin, imax, jmin, jmax, imefigf, imefigf_zoom, ps):
+def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_ij, imin, imax, jmin, jmax, imefigf, ps):
     off = 5
     
     circle_min_x, circle_max_x = max(jmin-off, 0), min(jmax+off, pltcmf.shape[1])
@@ -1077,74 +1077,94 @@ def make_plot(pltcmf, plumemask, i, j, maxfetchpx, manual_boundary_coordinates_i
         plume_min_x, plume_max_x = min([plume_x.min(), jmin-off]), max([plume_x.max(), jmax+off])
         plume_min_y, plume_max_y = min([plume_y.min(), imin-off]), max([plume_y.max(), imax+off])
 
-    figrows,figcols,figscale=2,3,5
+    figrows,figcols,figscale=3,2,5
 
     figsize=(2*figcols*figscale,figrows*figscale*1.05)
-    fig,ax = pl.subplots(figrows,figcols,figsize=figsize)
-                    #sharex=True,sharey=True)
-    
-    # Full plume
+    mosaic = """.AABB
+                .CCDD
+                .EEFF"""
+    fig, axm = pl.subplot_mosaic(mosaic, layout='constrained', figsize=figsize)
+    ax = [[axm['A'], axm['C'], axm['E']],
+          [axm['B'], axm['D'], axm['F']]]
+
+    def do_one_imshow(axis, imdata, vmin, vmax, cmap, extent, do_cb = True):
+        im = axis.imshow(imdata[::-1,:],vmin=vmin,vmax=vmax,cmap=cmap, extent=extent) # reverse first dim
+        if do_cb:
+            divider = make_axes_locatable(axis)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            fig.colorbar(im, cax=cax)
+
     ma = np.max(pltcmf[circle_min_y:circle_max_y, 
                        circle_min_x:circle_max_x])
-    im = ax[0][0].imshow(pltcmf,vmin=0,vmax=1500,cmap='inferno')
-    fig.colorbar(im, ax=ax[0][0])
-    im = ax[1][0].imshow(pltcmf,vmin=0,vmax=ma,cmap='inferno')
-    fig.colorbar(im, ax=ax[1][0])
 
-    # Circle
-    im = ax[0][1].imshow(pltcmf,vmin=0,vmax=1500,cmap='inferno')
-    fig.colorbar(im, ax=ax[0][1])
-    im = ax[1][1].imshow(pltcmf,vmin=0,vmax=ma,cmap='inferno')
-    fig.colorbar(im, ax=ax[1][1])
+    nx, ny = pltcmf.shape
+    # Use of imshow with both extent and set_xlim and set_ylim is confusing.
+    # In order to plot with north up, we need to:
+    # 1. reverse the min/max for the vertical dimension in the plot, which we call y here
+    # 2. reverse the bottom and the top in the extent
+    # 3. reverse the first dimension of the array in the imshow command
+    plume_min_x_m, plume_max_x_m = (plume_min_x - j) * ps, (plume_max_x - j) * ps # reverse
+    plume_min_y_m, plume_max_y_m = [(plume_min_y - i) * ps, (plume_max_y - i) * ps][::-1] # reverse
 
+    circle_min_x_m, circle_max_x_m = (circle_min_x - j) * ps, (circle_max_x - j) * ps
+    circle_min_y_m, circle_max_y_m = [(circle_min_y - i) * ps, (circle_max_y - i) * ps][::-1]
+    
+    # Change axes to meters centered on the pseudo-origin
+    l, r, b, t = (0-j)*ps, (ny-1-j)*ps, (nx-1-i)*ps, (0-i)*ps
+     
+    extent = [l, r, t, b] # reverse top and bottom
+    
+    # Will be zoomed to show full plume
+    do_one_imshow(ax[0][0], pltcmf, 0, 1500, 'inferno', extent, do_cb = False)
+    do_one_imshow(ax[1][0], pltcmf, 0, ma,   'inferno', extent, do_cb = False)
 
-    ax[0][2].imshow(pltcmf,vmin=0,vmax=1500,cmap='YlOrRd') 
+    # Will be zoomed to show maxfetchm area around pseudo origin
+    do_one_imshow(ax[0][1], pltcmf, 0, 1500, 'inferno', extent)
+    do_one_imshow(ax[1][1], pltcmf, 0, ma,   'inferno', extent)
+
+    # Will be zoomed to show maxfetchm area around pseudo origin and plume mask
+    do_one_imshow(ax[0][2], pltcmf, 0, 1500, 'YlOrRd', extent, do_cb = False)
+    do_one_imshow(ax[1][2], pltcmf, 0, ma,   'YlOrRd', extent, do_cb = False)
     plumemask[plumemask==1] = np.nan
-    ax[0][2].imshow(plumemask,vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8)
-    ax[1][2].imshow(pltcmf,vmin=0,vmax=ma,cmap='YlOrRd') 
-    ax[1][2].imshow(plumemask,vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8)
+    ax[0][2].imshow(plumemask[::-1,:],vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8, extent = extent)
+    ax[1][2].imshow(plumemask[::-1,:],vmin=0,vmax=1,cmap='Blues_r', alpha = 0.8, extent = extent)
 
-    ax[0][0].plot(j, i, 'o', color = 'white', markersize = 10)
-    ax[0][1].plot(j, i, 'o', color = 'white', markersize = 10)
-    ax[1][0].plot(j, i, 'o', color = 'white', markersize = 10)
-    ax[1][1].plot(j, i, 'o', color = 'white', markersize = 10)
-    ax[0][2].plot(j, i, 'o', color = 'red', markersize = 10)
-    ax[1][2].plot(j, i, 'o', color = 'red', markersize = 10)
+    ax[0][0].plot(0, 0, 'o', color = 'lime', markersize = 10)
+    ax[0][1].plot(0, 0, 'o', color = 'lime', markersize = 10)
+    ax[1][0].plot(0, 0, 'o', color = 'lime', markersize = 10)
+    ax[1][1].plot(0, 0, 'o', color = 'lime', markersize = 10)
+    ax[0][2].plot(0, 0, 'o', color = 'red', markersize = 10)
+    ax[1][2].plot(0, 0, 'o', color = 'red', markersize = 10)
 
     for axes in ax:
         for a in axes:
-            circle = patches.Circle((j,i), maxfetchpx, fill=False, edgecolor='white', linewidth=2)
+            circle = patches.Circle((0,0), maxfetchpx*ps, fill=False, edgecolor='white', linewidth=2)
             a.add_patch(circle)
             if len(manual_boundary_coordinates_ij) > 0:
-                a.plot(plume_x, plume_y, np.array(manual_boundary_coordinates_ij)[:,0], color = 'white')
+                a.plot((plume_x-j)*ps, (plume_y-i)*ps, color = 'white')
 
     if len(manual_boundary_coordinates_ij) > 0:
-        ax[0][0].set_xlim([plume_min_x, plume_max_x])
-        ax[0][0].set_ylim([plume_min_y, plume_max_y])
-        ax[1][0].set_xlim([plume_min_x, plume_max_x])
-        ax[1][0].set_ylim([plume_min_y, plume_max_y])
-
+        ax[0][0].set_xlim([plume_min_x_m, plume_max_x_m])
+        ax[0][0].set_ylim([plume_min_y_m, plume_max_y_m])
+        ax[1][0].set_xlim([plume_min_x_m, plume_max_x_m])
+        ax[1][0].set_ylim([plume_min_y_m, plume_max_y_m])
     else:
-        ax[0][0].set_xlim([circle_min_x, circle_max_x])
-        ax[0][0].set_ylim([circle_min_y, circle_max_y])
-        ax[1][0].set_xlim([circle_min_x, circle_max_x])
-        ax[1][0].set_ylim([circle_min_y, circle_max_y])
+        ax[0][0].set_xlim([circle_min_x_m, circle_max_x_m])
+        ax[0][0].set_ylim([circle_min_y_m, circle_max_y_m])
+        ax[1][0].set_xlim([circle_min_x_m, circle_max_x_m])
+        ax[1][0].set_ylim([circle_min_y_m, circle_max_y_m])
 
-    ax[0][1].set_xlim([circle_min_x, circle_max_x])
-    ax[0][1].set_ylim([circle_min_y, circle_max_y])
-    ax[1][1].set_xlim([circle_min_x, circle_max_x])
-    ax[1][1].set_ylim([circle_min_y, circle_max_y])
+    ax[0][1].set_xlim([circle_min_x_m, circle_max_x_m])
+    ax[0][1].set_ylim([circle_min_y_m, circle_max_y_m])
+    ax[1][1].set_xlim([circle_min_x_m, circle_max_x_m])
+    ax[1][1].set_ylim([circle_min_y_m, circle_max_y_m])
 
-    ax[0][2].set_xlim([circle_min_x, circle_max_x])
-    ax[0][2].set_ylim([circle_min_y, circle_max_y])
-    ax[1][2].set_xlim([circle_min_x, circle_max_x])
-    ax[1][2].set_ylim([circle_min_y, circle_max_y])
+    ax[0][2].set_xlim([circle_min_x_m, circle_max_x_m])
+    ax[0][2].set_ylim([circle_min_y_m, circle_max_y_m])
+    ax[1][2].set_xlim([circle_min_x_m, circle_max_x_m])
+    ax[1][2].set_ylim([circle_min_y_m, circle_max_y_m])
     
-    pl.suptitle(f'ps={ps:3.1f}')                    
-    pl.tight_layout()
     pl.savefig(imefigf)
-
-    pl.savefig(imefigf_zoom)
     pl.close()
 
 if __name__ == '__main__':
