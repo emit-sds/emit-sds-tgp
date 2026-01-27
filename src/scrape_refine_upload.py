@@ -77,8 +77,11 @@ def get_sds_cog(fid, enh_version, dtype='ch4', data_value=''):
 @click.option('--specific_pid', type=str, default=None, help='Run this and only this plume ID (for debugging)')
 @click.option('--sync_results', is_flag=True, help='sync results to remove server')
 @click.option('--software_build_version', type=str, default=None, help='overwrite current tag with this software build version')
+@click.option('--raw_annotation_override', type=str, default=None, help='ignore the key and id, and use this local file as the raw annotation input')
 def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: str, 
-         gtype: str, database_config: str, loglevel, logfile, continuous, track_coverage_file, plume_buffer_px, write_dcid_tifs, n_cores, num_dcids, specific_pid, sync_results, software_build_version):
+         gtype: str, database_config: str, loglevel, logfile, continuous, track_coverage_file, 
+         plume_buffer_px, write_dcid_tifs, n_cores, num_dcids, specific_pid, sync_results, 
+         software_build_version, raw_annotation_override):
 
     # make an args like object that holds the parameters
     class Args:
@@ -102,6 +105,7 @@ def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: s
     args.specific_pid = specific_pid
     args.sync_results = sync_results
     args.software_build_version = software_build_version
+    args.raw_annotation_override = raw_annotation_override
 
     
 
@@ -112,6 +116,10 @@ def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: s
     max_runs = 1
     if args.continuous:
         max_runs = int(1e15)
+    
+    if args.raw_annotation_override is not None:
+        max_runs = 1
+        logging.info('Using raw annotation override file, running single iteration')
 
     try:
         database = WorkflowManager(config_path=args.database_config).database_manager
@@ -131,7 +139,10 @@ def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: s
         ######## Step 1 ###########
 
         # Update annotations file load
-        utils.print_and_call(f'curl "https://popo.jpl.nasa.gov/mmgis/API/files/getfile" -H "Authorization:Bearer {args.key}" --data-raw "id={args.id}" > {fn.annotation_file_raw} 2>/dev/null')
+        if args.raw_annotation_override is None:
+            utils.print_and_call(f'curl "https://popo.jpl.nasa.gov/mmgis/API/files/getfile" -H "Authorization:Bearer {args.key}" --data-raw "id={args.id}" > {fn.annotation_file_raw} 2>/dev/null')
+        else:
+            utils.print_and_call(f'cp {args.raw_annotation_override} {fn.annotation_file_raw}')
         
         if fn.annotation_size is not None and os.path.getsize(fn.annotation_file_raw) == fn.annotation_size:
             time.sleep(10)
@@ -528,7 +539,7 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
         if os.path.isfile(outmask_finepoly_file):
             os.remove(outmask_finepoly_file)
         utils.print_and_call(f'gdal_polygonize {outmask_ort_file} {outmask_finepoly_file} -f GeoJSON -mask {outmask_ort_file} -8 -quiet')
-        utils.print_and_call(f'ogr2ogr {outmask_poly_file} {outmask_finepoly_file} -f GeoJSON -lco RFC7946=YES -simplify {trans[1]} --quiet')
+        utils.print_and_call(f'ogr2ogr {outmask_poly_file} {outmask_finepoly_file} -f GeoJSON -lco RFC7946=YES -simplify {trans[1]/2} --quiet')
 
         # Read back in the polygon we just wrote
         plume_to_add = json.load(open(outmask_poly_file))['features']
