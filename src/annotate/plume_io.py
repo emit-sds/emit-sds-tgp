@@ -24,6 +24,7 @@ from copy import deepcopy
 import subprocess
 import matplotlib.pyplot as plt
 import datetime
+import logging
 from quantification import compute_Q_and_uncertainty_utils
 
 
@@ -129,12 +130,15 @@ def write_color_quicklook(indat, output_file, inmask=None, trim=True):
     output[mask,:] = np.maximum(1, output[mask])
 
     if trim:
-        output = trim_color_plume(output, None, nodata_value=0, buffer=0)
+        output = trim_color_plume(output, nodata_value=0, buffer=0)
 
+    if output is None:
+        logging.info('No valid plume pixels found to write quicklook {output_file}')
+        return
 
     memdriver = gdal.GetDriverByName('MEM')
     memdriver.Register()
-    outDataset = memdriver.Create('',dat.shape[1],dat.shape[0],3,gdal.GDT_Byte)
+    outDataset = memdriver.Create('',output.shape[1],output.shape[0],3,gdal.GDT_Byte)
     for n in range(1,4):
         outDataset.GetRasterBand(n).WriteArray(output[...,n-1])
         outDataset.GetRasterBand(n).SetNoDataValue(0)
@@ -314,10 +318,10 @@ def trim_color_plume(plume_in, nodata_value=0, buffer=0):
     if len(plume_in.shape) != 3:
         raise ValueError('plume_in must be a 3D array')
 
-    plume_mask = np.all(plume_in == nodata_value, axis=2)
+    plume_mask = np.logical_not(np.all(plume_in == nodata_value, axis=2))
 
-    y_locs = np.where(np.sum(plume_mask != nodata_value, axis=1))[0]
-    x_locs = np.where(np.sum(plume_mask != nodata_value, axis=0))[0]
+    y_locs = np.where(np.sum(plume_mask, axis=1))[0]
+    x_locs = np.where(np.sum(plume_mask, axis=0))[0]
 
     if len(y_locs) == 0 or len(x_locs) == 0:
         return None
