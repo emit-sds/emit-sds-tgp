@@ -78,10 +78,11 @@ def get_sds_cog(fid, enh_version, dtype='ch4', data_value=''):
 @click.option('--sync_results', is_flag=True, help='sync results to remove server')
 @click.option('--software_build_version', type=str, default=None, help='overwrite current tag with this software build version')
 @click.option('--raw_annotation_override', type=str, default=None, help='ignore the key and id, and use this local file as the raw annotation input')
+@click.option('--sync_only', is_flag=True, help='Only sync data')
 def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: str, 
          gtype: str, database_config: str, loglevel, logfile, continuous, track_coverage_file, 
          plume_buffer_px, write_dcid_tifs, n_cores, num_dcids, specific_pid, sync_results, 
-         software_build_version, raw_annotation_override):
+         software_build_version, raw_annotation_override, sync_only):
 
     # make an args like object that holds the parameters
     class Args:
@@ -106,7 +107,7 @@ def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: s
     args.sync_results = sync_results
     args.software_build_version = software_build_version
     args.raw_annotation_override = raw_annotation_override
-
+    args.sync_only = sync_only
     
 
     logging.basicConfig(format='%(levelname)s:%(asctime)s ||| %(message)s', level=args.loglevel,
@@ -131,6 +132,10 @@ def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: s
     fn.coverage_size = os.path.getsize(args.track_coverage_file)
     fn.annotation_size = None
     coverage = None
+
+    if args.sync_only:
+        sync_all(fn)
+        return  
 
 
     # Loop only serves to rerun same instances over and over
@@ -257,8 +262,8 @@ def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: s
             # Step 5
             for res in results:
                 updated_plumes_point, updated_plumes_poly, ws_update = res
-                outdict = update_features(outdict, updated_plumes_poly, is_point=False, add_imgs=True, fn=fn, gtype=args.type)
-                outdict = update_features(outdict, updated_plumes_point, is_point=True, add_imgs=True, fn=fn, gtype=args.type)
+                outdict = update_features(outdict, updated_plumes_poly, is_point=False, add_imgs=True, fn=fn)
+                outdict = update_features(outdict, updated_plumes_point, is_point=True, add_imgs=True, fn=fn)
                 updated_windspeeds.extend(ws_update)
 
             # Final write
@@ -278,8 +283,8 @@ def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: s
                 updated_windspeeds.extend(ws_update)
 
                 # Step 5
-                outdict = update_features(outdict, updated_plumes_poly, is_point=False, add_imgs=True, fn=fn, gtype=args.type)
-                outdict = update_features(outdict, updated_plumes_point, is_point=True, add_imgs=True, fn=fn, gtype=args.type)
+                outdict = update_features(outdict, updated_plumes_poly, is_point=False, add_imgs=True, fn=fn)
+                outdict = update_features(outdict, updated_plumes_point, is_point=True, add_imgs=True, fn=fn)
 
                 utils.print_and_call(f'cp {fn.annotation_file} {fn.previous_annotation_file}')
                 plume_io.write_geojson_linebyline(fn.output_json_internal, outdict) # Final write
@@ -293,12 +298,18 @@ def main(key: str, id: str, out_dir: str, data_version: str, enh_data_version: s
 
         # Sync
         if args.sync_results:
-            utils.print_and_call(f'scp -q {fn.output_json_internal} ${{USER}}@${{NGIS_DATA_IP}}:/data/emit/mmgis/coverage/')
-            utils.print_and_call(f'scp -q {fn.output_json_external} ${{USER}}@${{NGIS_DATA_IP}}:/data/emit/mmgis/coverage/')
-            utils.print_and_call(f'rclone sync {fn.quant_dir}/ {fn.dst_img_dir}/{args.type}_q --progress --transfers=16 --include="*_ql.png" -q > NUL 2>&1')
+            sync_all(fn)
+    
 
 
-        
+def sync_all(fn):
+
+    utils.print_and_call(f'scp -q {fn.output_json_internal} ${{USER}}@${{NGIS_DATA_IP}}:/data/emit/mmgis/coverage/')
+    utils.print_and_call(f'scp -q {fn.output_json_external} ${{USER}}@${{NGIS_DATA_IP}}:/data/emit/mmgis/coverage/')
+    utils.print_and_call(f'/store/shared/rclone/bin/rclone sync {fn.quant_dir}/ {fn.dst_img_dir} --progress --transfers=16 --include="*_ql.png" -q > NUL 2>&1')
+    fn.stac_sync()
+
+       
 
 
 class Filenames:
@@ -318,10 +329,10 @@ class Filenames:
         self.proc_dir = os.path.join(args.out_dir, 'processing') # Processing working directory
         self.working_windspeed_csv = os.path.join(args.out_dir, 'working_windspeed_estimates.csv') # Quantification windspeed working file
 
-        self.dst_plm_cogdir = 'redhat:/data/emit/mmgis/mosaics/plm_cogs'
-        self.dst_img_dir = 'redhat:/data/emit/mmgis/mosaics/images'
+        self.dst_plm_cogdir = f'redhat:/data/emit/mmgis/mosaics/plm_cogs/{args.type}'
+        self.dst_img_dir = f'redhat:/data/emit/mmgis/mosaics/images/{args.type}_q'
 
-        self.type = args.type
+        self.gtype = args.type
 
 
         if create:
@@ -340,38 +351,43 @@ class Filenames:
  
     def feature_filenames(self, feat):
         outbase = self.plume_working_basename(self.proc_dir, feat)
-        outmask_finepoly_file = os.path.join(outbase + '_finepolygon.json')
-        outmask_poly_file = os.path.join(outbase + '_polygon.json')
-        outmask_ort_file = os.path.join(outbase + '_mask_ort.tif')
+        outmask_finepoly_file = outbase + '_finepolygon.json'
+        outmask_poly_file = outbase + '_polygon.json'
+        outmask_ort_file = outbase + '_mask_ort.tif'
         return outmask_finepoly_file, outmask_poly_file, outmask_ort_file
 
-    def quantification_filenames(self, poly_plume, gtype):
+    def quantification_filenames(self, poly_plume):
         base = self.plume_working_basename(self.quant_dir, poly_plume)
 
-        raster_file = base + '_unmasked_' + gtype.upper() + '.tif'
-        unc_file = base + '_unmasked_' + gtype.upper() + '_unc.tif'
-        sns_file = base + '_unmasked_' + gtype.upper() + '_sns.tif'
+        raster_file = base + '_unmasked_' + self.gtype.upper() + '.tif'
+        unc_file = base + '_unmasked_' + self.gtype.upper() + '_unc.tif'
+        sns_file = base + '_unmasked_' + self.gtype.upper() + '_sns.tif'
 
         return raster_file, unc_file, sns_file
     
-    def delivery_filenames(self, poly_plume, gtype, daac_version=False):
+    def cmr_filename(self, poly_plume):
+        base = self.plume_delivery_basename(self.daac_dir, poly_plume)
+        cmr_file = base + f'.cmr.json'
+        return cmr_file
+    
+    def delivery_filenames(self, poly_plume, daac_version=False):
         if daac_version:
             delivery_base = self.plume_delivery_basename(self.daac_dir, poly_plume)
         else:
             delivery_base = self.plume_delivery_basename(self.delivery_dir, poly_plume)
 
         os.makedirs(os.path.dirname(delivery_base), exist_ok=True)
-        delivery_raster_file = os.path.join(delivery_base + '.tif')
-        delivery_ql_file = os.path.join(delivery_base + '.png')
-        delivery_json_file = os.path.join(delivery_base + '.json')
-        delivery_uncert_file = delivery_raster_file.replace(gtype.upper(), gtype.upper() + '_UNC')
-        delivery_sens_file = delivery_raster_file.replace(gtype.upper(), gtype.upper() + '_SNS')
+        delivery_raster_file = delivery_base + '.tif'
+        delivery_ql_file = delivery_base + '.png'
+        delivery_json_file = delivery_base + '.json'
+        delivery_uncert_file = delivery_raster_file.replace(self.gtype.upper(), self.gtype.upper() + '_UNC')
+        delivery_sens_file = delivery_raster_file.replace(self.gtype.upper(), self.gtype.upper() + '_SNS')
 
         return delivery_raster_file, delivery_ql_file, delivery_json_file, delivery_uncert_file, delivery_sens_file
     
-    def mmgis_q_img_filename_dict(self, plume, gtype):
+    def mmgis_q_img_filename_dict(self, plume):
 
-        basedir = f'Layers/mosaics/images/{gtype}_q/'
+        basedir = f'Layers/mosaics/images/{self.gtype}_q/'
         img_dicts = [{
                 'name': 'Quantification Mask',
                 'url': basedir +  plume['properties']['Plume ID'] + '_ql.png',
@@ -384,25 +400,27 @@ class Filenames:
             }]
         return img_dicts
     
-    def stac_sync(self, dest_dir):
+    def stac_sync(self):
         output_plumes = [x for x in json.load(open(self.output_json_external, 'r'))['features'] if x['geometry']['type'] == 'Polygon']
         for plume in output_plumes:
-            plm_in_file = self.delivery_filenames(plume, "ch4", daac_version=True)[0]
+            plm_in_file = self.delivery_filenames(plume, daac_version=True)[0]
             dt = datetime.datetime.strptime(os.path.basename(plm_in_file).split('_')[0], 'emit%Y%m%dt%H%M%S')
-            plm_out_file = os.path.join(dest_dir, dt.strftime('%Y-%m-%dT%M_%H_%S') + '-to-' + (dt + datetime.timedelta(seconds=1)).strftime('%Y-%m-%dT%M_%H_%S'))
-            cmd_str = f'rclone copyto {plm_in_file} {plm_out_file}.tif --progress -q > NUL 2>&1'
-            subprocess.run(cmd_str, shell=True)
+            plm_out_file = os.path.join(self.dst_plm_cogdir, dt.strftime('%Y-%m-%dT%M_%H_%S') + '-to-' + (dt + datetime.timedelta(seconds=1)).strftime('%Y-%m-%dT%M_%H_%S'))
+            cmd_str = f'/store/shared/rclone/bin/rclone copyto {plm_in_file} {plm_out_file}.tif --progress -q > NUL 2>&1'
+            utils.print_and_call(cmd_str)
 
     def daac_sync(self):
 
         output_plumes = [x for x in json.load(open(self.output_json_external, 'r'))['features'] if x['geometry']['type'] == 'Polygon']
         for plume in output_plumes:
-            delivery_raster, delivery_ql, delivery_json, delivery_uncert, delivery_sens = self.delivery_filenames(plume, 'point', daac_version=False)
-            daac_raster, daac_ql, daac_json, daac_uncert, daac_sens = self.delivery_filenames(plume, 'point', daac_version=True)
+            delivery_raster, delivery_ql, delivery_json, delivery_uncert, delivery_sens = self.delivery_filenames(plume, daac_version=False)
+            daac_raster, daac_ql, daac_json, daac_uncert, daac_sens = self.delivery_filenames(plume, daac_version=True)
+            cmr_file = self.cmr_filename(plume)  
             for de, da in zip([delivery_raster, delivery_ql, delivery_json],
                                [daac_raster, daac_ql, daac_json]):
 
-                if os.path.isfile(da):
+                # desitnation and CMR file (indicating delivery) need to be present before we worry.  Otherwise, just copy
+                if os.path.isfile(da) and os.path.isfile(cmr_file): 
                     # Check if file contents are the same - skip geotiff metadata
                     same = False
                     if da.endswith('.json'):
@@ -554,7 +572,7 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
 
 
 
-        delivery_raster_file, delivery_ql_file, delivery_json_file, delivery_uncert_file, delivery_sens_file = fn.delivery_filenames(poly_plume, args.type)
+        delivery_raster_file, delivery_ql_file, delivery_json_file, delivery_uncert_file, delivery_sens_file = fn.delivery_filenames(poly_plume)
 
         # Write delivery files
         meta = plume_io.get_metadata(poly_plume, plume_io.global_metadata(data_version=args.data_version, software_version=args.software_build_version))
@@ -564,7 +582,7 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
         plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file, inmask=loc_fid_mask, trim=True)
 
         # Write unmasked version of delivery files for quantification (mainly for plotting)
-        quant_raster_file, quant_uncert_file, quant_sens_file = fn.quantification_filenames(poly_plume, args.type)
+        quant_raster_file, quant_uncert_file, quant_sens_file = fn.quantification_filenames(poly_plume)
         plume_io.write_cog(quant_raster_file, cut_plume_data.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
         plume_io.write_cog(quant_uncert_file, cut_uncdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
         plume_io.write_cog(quant_sens_file, cut_snsdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta)
@@ -600,7 +618,7 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
     return updated_plumes_point, updated_plumes_poly, updated_windspeed
 
 
-def update_features(existing: dict, new_features: List, is_point: bool, add_imgs: dict=None, fn: Filenames=None, gtype: str = 'ch4') -> dict:
+def update_features(existing: dict, new_features: List, is_point: bool, add_imgs: dict=None, fn: Filenames=None) -> dict:
 
     if int(add_imgs is not None) + int(fn is not None) == 1:
         logging.warning('Both add_imgs and fn must be provided, or neither; skipping image addition')
@@ -616,7 +634,7 @@ def update_features(existing: dict, new_features: List, is_point: bool, add_imgs
             logging.warning("HELP! Too many matching indices")
 
         if add_imgs is not None and fn is not None:
-            plm['properties']['images'] = fn.mmgis_q_img_filename_dict(plm, gtype.lower())
+            plm['properties']['images'] = fn.mmgis_q_img_filename_dict(plm)
 
         if len(existing_match_index) > 0:
             existing['features'][existing_match_index[0]] = plm
