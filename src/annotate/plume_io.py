@@ -118,15 +118,21 @@ def write_color_plume(rawdat, plumes_mask, glt_ds, outname: str, style = 'ch4'):
     write_cog(outname, colorized, glt_ds, nodata_value=0)
 
 
-def write_color_quicklook(indat, output_file, inmask=None, trim=True):
+def write_color_quicklook(indat, output_file, inmask=None, trim=True, style='ch4'):
     dat = indat.copy()
     if inmask is not None:
         dat[np.logical_not(inmask)] = -9999
     mask = dat != -9999
     dat[dat < 0] = 0
-    dat = dat /1500.
+
     output = np.zeros((indat.shape[0],indat.shape[1],3),dtype=np.uint8)
-    output[mask,:] = np.round(plt.cm.plasma(dat[mask])[...,:3] * 255).astype(np.uint8)
+    if style == 'ch4':
+        dat /= 1500.
+        output[mask,:] = np.round(plt.cm.plasma(dat[mask])[...,:3] * 255).astype(np.uint8)
+    if style == 'co2':
+        dat /= 85000
+        output[mask,:] = np.round(plt.cm.viridis(dat[mask])[...,:3] * 255).astype(np.uint8)
+
     output[mask,:] = np.maximum(1, output[mask])
 
     if trim:
