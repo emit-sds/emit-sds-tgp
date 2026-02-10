@@ -579,7 +579,7 @@ def process_dcid(dcid, manual_annotations, new_plumes, fn, args):
         plume_io.write_cog(delivery_raster_file, cut_plume_data.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
         plume_io.write_cog(delivery_uncert_file, cut_uncdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
         plume_io.write_cog(delivery_sens_file, cut_snsdat.astype(np.float32), newp_trans, ort_ds.GetProjection(), nodata_value=-9999, metadata=meta, mask=loc_fid_mask)
-        plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file, inmask=loc_fid_mask, trim=True)
+        plume_io.write_color_quicklook(cut_plume_data, delivery_ql_file, inmask=loc_fid_mask, trim=True, style=args.type)
 
         # Write unmasked version of delivery files for quantification (mainly for plotting)
         quant_raster_file, quant_uncert_file, quant_sens_file = fn.quantification_filenames(poly_plume)
