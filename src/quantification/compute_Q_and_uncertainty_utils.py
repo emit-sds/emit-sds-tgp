@@ -286,7 +286,7 @@ def add_results_to_image(plume_id, emissions_info, date_time_str, lat_float, lng
     if output_image_filename is None:
         output_image_filename = input_image_filename
     
-    IME = emissions_info['Emissions Rate Estimate (kg/hr)'] * emissions_info['Fetch Length (m)'] / emissions_info['Wind Speed (m/s)']
+    IME = emissions_info['Emissions Rate Estimate (kg/hr)'] * emissions_info['Fetch Length (m)'] / emissions_info['Wind Speed (m/s)'] / 3600
 
     s = f'{plume_id}\n' + \
         f'{date_time_str}\n' + \
