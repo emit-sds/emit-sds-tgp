@@ -59,8 +59,6 @@ from matplotlib.path import Path
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-import matplotlib.patheffects as pe
-
 import rasterio as rio
 import pandas as pd
 from annotate import plume_io
