@@ -151,7 +151,7 @@ def update_EMIT_plume_list_windspeeds(current_wind_speed_csv_filename = None,
         ind = all_plume_list.index(new_plume)
         
         fids_str = '_'.join(j['features'][ind]['properties']['fids'])
-        if j['features'][ind]['properties']['Psuedo-Origin'] == '':
+        if j['features'][ind]['properties']['Origin'] == '':
             d = {'plume_id': new_plume, 'FID': fids_str}
             results_list.append(d)
             continue
@@ -159,7 +159,7 @@ def update_EMIT_plume_list_windspeeds(current_wind_speed_csv_filename = None,
         d = get_EMIT_plume_windspeeds(new_plume, current_wind_speed_csv_filename)
         d = d.to_dict(orient='records')[0]
 
-        #lon, lat, _ = json.loads(j['features'][ind]['properties']['Psuedo-Origin'])['coordinates']
+        #lon, lat, _ = json.loads(j['features'][ind]['properties']['Origin'])['coordinates']
         #fids_str = '_'.join(j['features'][ind]['properties']['fids'])
         #fid = j['features'][ind]['properties']['fids'][0] # Just use the first one if there are two
 
@@ -223,10 +223,11 @@ def get_EMIT_plume_windspeeds(plume, input_wind_speed_csv_filename = None):
     '''
     
     logging.debug(f'Get windspeed for {plume["properties"]["Plume ID"]}')
-    if plume['properties']['Psuedo-Origin'] == '':
+    if 'Origin' not in plume['properties'] or plume['properties']['Origin'] == '' or len(plume['properties']['Origin']) == 0 :
         return None
 
-    lon, lat, _ = json.loads(plume['properties']['Psuedo-Origin'])['coordinates']
+    lat = plume['properties']['Origin'][0]['coords'][1]
+    lon = plume['properties']['Origin'][0]['coords'][0]
     date, frac_time = get_datetime_from_fid(plume['properties']['fids'][0])
 
     if os.path.exists(input_wind_speed_csv_filename):
