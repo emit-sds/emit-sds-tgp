@@ -223,7 +223,7 @@ def get_EMIT_plume_windspeeds(plume, input_wind_speed_csv_filename = None):
     '''
     
     logging.debug(f'Get windspeed for {plume["properties"]["Plume ID"]}')
-    if plume['properties']['Origin'] == '':
+    if 'Origin' not in plume['properties'] or plume['properties']['Origin'] == '' or len(plume['properties']['Origin']) == 0 :
         return None
 
     lat = plume['properties']['Origin'][0]['coords'][1]
