@@ -169,7 +169,7 @@ def ime2cq(ime_kg,fetch_m):
 def geo2utmzone(lng,lat):
     if lng > 180.0:
         lng = lng-360.0
-    zone = int((180.0+lng)/6.0)
+    zone = int((180.0+lng)/6.0)  + 1
     hemi = 'N' if (lat >= 0.0) else 'S'
     return zone,hemi
 
