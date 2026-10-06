@@ -163,7 +163,7 @@ Table 1-2: EMIT L2B Data Products Summary
 
 ### 1.5 Product Availability
 
-The EMIT L2B Greenhouse Gas products will be available at the NASA Land Processes Distributed Active Archive Center (LP DAAC, https://lpdaac.usgs.gov/) and through NASA Earthdata (https://earthdata.nasa.gov/).
+The EMIT L2B Greenhouse Gas products will be available at the NASA Land Processes Distributed Active Archive Center (LP DAAC, https://www.earthdata.nasa.gov/centers/lp-daac) and through NASA Earthdata (https://earthdata.nasa.gov/).
 
 ## 2. Greenhouse Gas Products
 
