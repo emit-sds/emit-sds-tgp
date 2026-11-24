@@ -17,13 +17,19 @@
 # Author: Winston Olson-Duvall, winston.olson-duvall@jpl.nasa.gov
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
 import os
 import subprocess
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
+import netCDF4
 import numpy as np
+import requests
 import spectral.io.envi as envi
 
 from osgeo import gdal
@@ -70,6 +76,96 @@ def get_band_mean(input_file: str, band) -> float:
     good = target > -9990
 
     return np.mean(target[good])
+
+
+stderr_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def suppress_stderr():
+    with stderr_lock:
+        sys.stderr.flush()
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        saved = os.dup(2)
+        os.dup2(devnull, 2)
+        try:
+            yield
+        finally:
+            os.dup2(saved, 2)
+            os.close(saved)
+            os.close(devnull)
+
+
+def get_band_means(obs, start, stop):
+    data = obs[:, :, start:stop].astype(np.float64)
+    data[data <= -9990] = np.nan
+    return np.nanmean(data, axis=(0, 1))
+
+
+def search_granule(session, short_name, version, granule_pattern, fmt):
+    params = {
+        "short_name": short_name,
+        "version": version,
+        "readable_granule_name": granule_pattern,
+        "options[readable_granule_name][pattern]": "true",
+        "page_size": 10,
+    }
+    r = session.get(f"https://cmr.earthdata.nasa.gov/search/granules.{fmt}", params=params)
+    r.raise_for_status()
+    return r.json()
+
+
+def get_sds_software_build_version(session, ghg, timestamp, version):
+    short_name = f"EMITL2B{ghg}ENH"
+    pattern = f"EMIT_L2B_{ghg}ENH_{version}_{timestamp}_*"
+    items = search_granule(session, short_name, version, pattern, "umm_json")["items"]
+    if len(items) != 1:
+        raise RuntimeError(f"Expected 1 {short_name} v{version} granule for {timestamp}, found {len(items)}")
+    umm = items[0]["umm"]
+    attrs = {a["Name"]: a["Values"] for a in umm.get("AdditionalAttributes", [])}
+    if "SOFTWARE_BUILD_VERSION" not in attrs:
+        raise RuntimeError(f"SOFTWARE_BUILD_VERSION not found for {umm['GranuleUR']}")
+    return attrs["SOFTWARE_BUILD_VERSION"][0]
+
+
+def search_obs_url(session, timestamp, version):
+    pattern = f"EMIT_L1B_RAD_{version}_{timestamp}_*"
+    entries = search_granule(session, "EMITL1BRAD", version, pattern, "json")["feed"]["entry"]
+    if len(entries) != 1:
+        raise RuntimeError(f"Expected 1 EMITL1BRAD v{version} granule for {timestamp}, found {len(entries)}")
+    urls = []
+    for link in entries[0]["links"]:
+        href = link["href"]
+        if href.startswith("https") and "_OBS_" in href and href.endswith(".nc"):
+            urls.append(href)
+    urls = list(dict.fromkeys(urls))
+    if len(urls) != 1:
+        raise RuntimeError(f"Expected 1 OBS .nc link for {entries[0]['title']}, found {len(urls)}")
+    return urls[0]
+
+
+def download_to_memory(url, session):
+    r = session.get(url, allow_redirects=False)
+    while r.status_code in (301, 302, 303, 307, 308):
+        url = r.headers["Location"]
+        if "amazonaws.com" in url or "cloudfront" in url:
+            r = requests.get(url)
+            break
+        r = session.get(url, allow_redirects=False)
+    r.raise_for_status()
+    return r.content
+
+
+def get_obs_solar_means(url, session):
+    raw = download_to_memory(url, session)
+    with suppress_stderr():
+        ds = netCDF4.Dataset("inmemory.nc", mode="r", memory=raw)
+    with ds:
+        obs = ds.variables["obs"]
+        obs.set_auto_mask(False)
+        az, zen = get_band_means(obs, 3, 5)
+    print(f"{url.split('/')[-1]}  solar_azimuth={az:.3f}  solar_zenith={zen:.3f}")
+    return az, zen
 
 
 def initialize_ummg(granule_name: str, creation_time: datetime, collection_name: str, collection_version: str,
@@ -282,7 +378,8 @@ def stage_files(wm, acq, files):
             raise RuntimeError(output.stderr.decode("utf-8"))
 
 
-def submit_cnm_notification(wm, acq, base_dir, granule_ur, files, formats, collection, collection_version):
+def submit_cnm_notification(wm, acq, base_dir, granule_ur, files, formats, collection, collection_version,
+                            dry_run=False):
     # Build notification dictionary
     utc_now = datetime.datetime.now(tz=datetime.timezone.utc)
     cnm_submission_id = f"{granule_ur}_{utc_now.strftime('%Y%m%dt%H%M%S')}"
@@ -304,16 +401,22 @@ def submit_cnm_notification(wm, acq, base_dir, granule_ur, files, formats, colle
     }
 
     for i, f in enumerate(files):
+        not_written = dry_run and formats[i] == "metadata"
         notification["product"]["files"].append(
             {
                 "name": f[1],
                 "uri": acq.aws_s3_uri_base + f[1],
                 "type": formats[i],
-                "size": os.path.getsize(f[0]),
+                "size": "<not written: dry run>" if not_written else os.path.getsize(f[0]),
                 "checksumType": "sha512",
-                "checksum": calc_checksum(f[0], "sha512")
+                "checksum": "<not written: dry run>" if not_written else calc_checksum(f[0], "sha512")
             }
         )
+
+    if dry_run:
+        print(f"Dry run: would write CNM notification to {cnm_submission_path} and submit to {queue_url}")
+        print(json.dumps(notification, indent=4))
+        return
 
     # Write notification submission to file
     print(f"Writing CNM notification file to {cnm_submission_path}")
@@ -332,7 +435,7 @@ def submit_cnm_notification(wm, acq, base_dir, granule_ur, files, formats, colle
         raise RuntimeError(output.stderr.decode("utf-8"))
 
 
-def deliver_plm(base_dir, fname, wm, ghg_config):
+def deliver_plm(base_dir, fname, wm, ghg_config, dry_run=False):
     if "CH4" in fname:
         GHG = "CH4"
     elif "CO2" in fname:
@@ -367,8 +470,12 @@ def deliver_plm(base_dir, fname, wm, ghg_config):
     # print(f"files: {files}")
 
     # Get the software_build_version (extended build num when GHG enhancement data product was created)
-    hdr = envi.read_envi_header(acq.ch4_hdr_path) if GHG == "CH4" else envi.read_envi_header(acq.co2_hdr_path)
-    sds_software_build_version = hdr["emit software build version"]
+    with open("cmr_token.txt") as f:
+        token = f.read().strip()
+    session = requests.Session()
+    session.headers["Authorization"] = f"Bearer {token}"
+    sds_software_build_version = get_sds_software_build_version(session, GHG, fname[4:19].upper(),
+                                                                ghg_config["enh_collection_version"])
 
     # Get ghg_software_build_version
     ds = gdal.Open(os.path.join(base_dir, fname))
@@ -381,19 +488,24 @@ def deliver_plm(base_dir, fname, wm, ghg_config):
     total_solar_zenith = 0
     total_solar_azimuth = 0
     total_cloud_fraction = 0
+    obs_urls = []
     for scene in source_scenes:
         if scene.startswith("emit"):
             acq_id = scene[:19]
         else:
             acq_id = f"emit{scene.split('_')[4].replace('T', 't')}"
         tmp_acq = WorkflowManager(wm.config_path, acquisition_id=acq_id).acquisition
-        total_solar_azimuth += get_band_mean(tmp_acq.obs_img_path, 3)
-        total_solar_zenith += get_band_mean(tmp_acq.obs_img_path, 4)
-        total_cloud_fraction += tmp_acq.cloud_fraction_02
+        total_cloud_fraction += tmp_acq.metadata["products"]["mask"]["02"]["maskTf"]["cloud_fraction"]
+        obs_urls.append(search_obs_url(session, acq_id[4:].upper(), ghg_config["obs_collection_version"]))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for az, zen in pool.map(lambda url: get_obs_solar_means(url, session), obs_urls):
+            total_solar_azimuth += az
+            total_solar_zenith += zen
     mean_solar_zenith = total_solar_zenith / len(source_scenes)
     mean_solar_azimuth = total_solar_azimuth / len(source_scenes)
     mean_cloud_fraction = total_cloud_fraction / len(source_scenes)
-
+    
     # Create the UMM-G file
     print(f"Creating ummg file at {local_ummg_path}")
     tif_creation_time = datetime.datetime.fromtimestamp(os.path.getmtime(local_plm_path), tz=datetime.timezone.utc)
@@ -417,16 +529,24 @@ def deliver_plm(base_dir, fname, wm, ghg_config):
                 found_coords = True
         if not found_coords:
             raise RuntimeError(f"Couldn't find coordinates for {fname} in {local_geojson_path}")
-    with open(local_ummg_path, 'w', errors='ignore') as fout:
-        fout.write(json.dumps(ummg, indent=2, sort_keys=False, cls=SerialEncoder))
+    if dry_run:
+        print(f"Dry run: would write ummg file to {local_ummg_path}")
+        print(json.dumps(ummg, indent=2, sort_keys=False, cls=SerialEncoder))
+    else:
+        with open(local_ummg_path, 'w', errors='ignore') as fout:
+            fout.write(json.dumps(ummg, indent=2, sort_keys=False, cls=SerialEncoder))
 
     # Copy files to staging server
-    print(f"Staging files to AWS S3 server")
-    stage_files(wm, acq, files)
+    if dry_run:
+        for f in files:
+            print(f"Dry run: would copy {f[0]} to {acq.aws_s3_uri_base + f[1]}")
+    else:
+        print(f"Staging files to AWS S3 server")
+        stage_files(wm, acq, files)
 
     # Build and submit CNM notification
     submit_cnm_notification(wm, acq, base_dir, granule_ur, files, ["data", "data", "browse", "metadata"],
-                            collection, ghg_config["collection_version"])
+                            collection, ghg_config["collection_version"], dry_run=dry_run)
 
 
 def main():
@@ -435,6 +555,9 @@ def main():
     parser.add_argument("path", help="The path to the product to be delivered.")
     parser.add_argument("--env", default="ops", help="The operating environment - dev, test, ops")
     parser.add_argument("--collection_version", default="001", help="The DAAC collection version")
+    parser.add_argument("--obs_collection_version", default="001", help="The EMITL1BRAD collection version for OBS lookup")
+    parser.add_argument("--enh_collection_version", default="002", help="The EMITL2B{CH4,CO2}ENH collection version for build version lookup")
+    parser.add_argument("--dry_run", action="store_true", help="Write, edit, and deliver nothing")
     args = parser.parse_args()
 
     # Get workflow manager and ghg config options
@@ -452,6 +575,8 @@ def main():
         "collection_version": args.collection_version,
         "repo_name": "emit-sds-tgp",
         "repo_version": repo_version,
+        "obs_collection_version": args.obs_collection_version,
+        "enh_collection_version": args.enh_collection_version,
         "dois": {
             "EMITL2BCH4PLM": f"10.5067/EMIT/EMITL2BCH4PLM.{args.collection_version}",
             "EMITL2BCO2PLM": f"10.5067/EMIT/EMITL2BCO2PLM.{args.collection_version}"
@@ -469,7 +594,7 @@ def main():
     wm = WorkflowManager(config_path=sds_config_path, acquisition_id=acq_id)
 
     if "Plume" in fname:
-        deliver_plm(base_dir, fname, wm, ghg_config)
+        deliver_plm(base_dir, fname, wm, ghg_config, dry_run=args.dry_run)
 
 
 if __name__ == '__main__':
