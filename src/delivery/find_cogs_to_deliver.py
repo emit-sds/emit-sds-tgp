@@ -77,19 +77,28 @@ def main():
 
         # Check the plume collection
         # print(f"Checking {ghg} plume collection {plm_coll}")
-        response = requests.get(url,
-                                params={'concept_id': plm_coll,
-                                        'temporal': datetime_range,
-                                        'page_size': page_size
-                                        },
-                                headers={
-                                    'Accept': 'application/json',
-                                    'Authorization': f'Bearer {token}'
-                                }
-                                )
-        # print(response.status_code)
-        # print(f"Number of granules found: {response.headers['CMR-Hits']}")  # Resulting quantity of granules/items.
-        granules = response.json()['feed']['entry']
+        # CMR caps page_size at 2000, so page through all results
+        granules = []
+        page_num = 1
+        while True:
+            response = requests.get(url,
+                                    params={'concept_id': plm_coll,
+                                            'temporal': datetime_range,
+                                            'page_size': page_size,
+                                            'page_num': page_num
+                                            },
+                                    headers={
+                                        'Accept': 'application/json',
+                                        'Authorization': f'Bearer {token}'
+                                    }
+                                    )
+            response.raise_for_status()
+            entries = response.json()['feed']['entry']
+            granules.extend(entries)
+            if not entries or len(granules) >= int(response.headers['CMR-Hits']):
+                break
+            page_num += 1
+        # print(f"Number of granules found: {len(granules)}")
         results = [g["title"].split("_")[4] + "_" + g["title"].split("_")[5] for g in granules]
         plm_cogs = glob.glob(os.path.join(base_dir, "20*/*tif"))
         # print(f"Number of plm COGs on filesystem: {len(plm_cogs)}")
@@ -98,7 +107,7 @@ def main():
             timestamp = os.path.basename(cog)[4:19].upper()
             plume_id = os.path.basename(cog).split("-")[-1].replace(".tif", "").zfill(6)
             unique_plm = f"{timestamp}_{plume_id}"
-            if unique_plm not in results:
+            if unique_plm not in results and 'UNC' not in cog and 'SNS' not in cog:
                 print(cog)
 
 
